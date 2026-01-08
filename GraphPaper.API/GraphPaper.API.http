@@ -1,0 +1,6 @@
+@GraphPaper.API_HostAddress = http://localhost:5265
+
+GET {{GraphPaper.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
