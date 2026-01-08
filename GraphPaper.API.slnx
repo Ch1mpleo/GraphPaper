@@ -1,3 +1,6 @@
 <Solution>
   <Project Path="GraphPaper.API/GraphPaper.API.csproj" />
+  <Project Path="GraphPaper.Application/GraphPaper.Application.csproj" />
+  <Project Path="GraphPaper.Domain/GraphPaper.Domain.csproj" />
+  <Project Path="GraphPaper.Infrastructure/GraphPaper.Infrastructure.csproj" />
 </Solution>
