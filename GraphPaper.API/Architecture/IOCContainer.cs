@@ -47,8 +47,11 @@ public static class IocContainer
 
         // Đăng ký DbContext với Npgsql - Postgres
         services.AddDbContext<GraphPaperDbContext>(options =>
-            options.UseNpgsql(connectionString,
-                sql => sql.MigrationsAssembly(typeof(GraphPaperDbContext).Assembly.FullName)
+            options.UseNpgsql(connectionString, sql =>
+            {
+                sql.MigrationsAssembly(typeof(GraphPaperDbContext).Assembly.FullName);
+                sql.UseVector();    // Enable vector extension for pgvector
+            }
             )
         );
 
