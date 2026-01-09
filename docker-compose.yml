@@ -1,0 +1,58 @@
+﻿services:
+  graphpaper.api:
+    image: ch1mple/graphpaper-api:latest
+    build:
+      context: .
+      dockerfile: GraphPaper.API/Dockerfile
+    depends_on:
+      graphpaper.database:
+        condition: service_started
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      # Connection String
+      - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
+      
+      # AI & Auth Settings
+      - GEMINI_API_KEY=AIzaSyD8YgqkR7d1gDYL_7cFXRDfYNhQl4glD4k
+      - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
+      - JWT__Issuer=GraphPaper_Issuer
+      - JWT__Audience=GraphPaper_Audience
+      
+      # Storage Settings (MinIO)
+      - MINIO_ENDPOINT=graphpaper.minio:9000
+      - MINIO_ACCESS_KEY=minioadmin 
+      - MINIO_SECRET_KEY=minioadmin
+    ports:
+      - "5000:8080"
+
+  graphpaper.database:
+    # IMPORTANT: Xài chuẩn pgvector image cho AI support
+    image: pgvector/pgvector:pg16
+    container_name: graphpaper_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: graphpaper_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - pg_graph_data:/var/lib/postgresql/data
+
+  # Nào xài thì mở
+  # graphpaper.minio:
+  #   image: minio/minio
+  #   container_name: graphpaper_minio
+  #   ports:
+  #     - "9000:9000"
+  #     - "9001:9001"
+  #   environment:
+  #     MINIO_ROOT_USER: minioadmin
+  #     MINIO_ROOT_PASSWORD: minioadmin
+  #   command: server /data --console-address ":9001"
+  #   volumes:
+  #     - minio_data:/data
+
+volumes:
+  pg_graph_data:
+  # minio_data:

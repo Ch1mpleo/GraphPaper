@@ -1,4 +1,7 @@
 <Solution>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
   <Project Path="GraphPaper.API/GraphPaper.API.csproj" />
   <Project Path="GraphPaper.Application/GraphPaper.Application.csproj" />
   <Project Path="GraphPaper.Domain/GraphPaper.Domain.csproj" />
