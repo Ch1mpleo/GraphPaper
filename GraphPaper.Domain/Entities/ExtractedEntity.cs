@@ -2,7 +2,7 @@
 {
     public class ExtractedEntity : BaseEntity
     {
-        public Guid ChunkId { get; set; } // Changed to Guid
+        public Guid ChunkId { get; set; }
         public string Name { get; set; } = string.Empty;
         public string EntityType { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
