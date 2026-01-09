@@ -1,6 +1,6 @@
 ﻿using GraphPaper.Infrastructure.Interfaces;
 
-namespace MovieTheater.Infrastructure.Commons;
+namespace GraphPaper.Infrastructure.Commons;
 
 public class CurrentTime : ICurrentTime
 {

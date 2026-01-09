@@ -1,25 +1,99 @@
+﻿using GraphPaper.API.Architecture;
+using SwaggerThemes;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.SetupIocContainer();
 
+builder.Configuration
+    .AddJsonFile("appsettings.json", true, true)
+    .AddEnvironmentVariables();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend",
+        policy =>
+        {
+            policy.WithOrigins(
+                "https://test.site",        // Production
+                "http://localhost:3000"    // Local dev
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+        });
+});
+
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    });
+
+// Tắt việc map claim mặc định
+JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+
+builder.WebHost.UseUrls("http://0.0.0.0:5000");
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(30);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+});
+
+
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = true;
+});
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+
+// Check chắc chắn MinIO bucket đã tồn tại sau khi project build
+//using (var scope = app.Services.CreateScope())
+//{
+//    var blob = scope.ServiceProvider.GetRequiredService<IBlobService>();
+//    await blob.EnsureBucketExistsAsync();
+//}
+
+app.UseCors("AllowFrontend");
+
+// Configure the HTTP request pipeline - REMEMBER
+if (app.Environment.IsDevelopment() || app.Environment.IsProduction())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "GraphPaper API v1");
+        c.RoutePrefix = string.Empty;
+        c.InjectStylesheet("/swagger-ui/custom-theme.css");
+        c.HeadContent = $"<style>{SwaggerTheme.GetSwaggerThemeCss(Theme.Dracula)}</style>";
+    });
 }
 
-app.UseHttpsRedirection();
+try
+{
+    app.ApplyMigrations(app.Logger);
+}
+catch (Exception e)
+{
+    app.Logger.LogError(e, "An problem occurred during migration!");
+}
 
+app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
+app.UseSession();
+
 
 app.Run();

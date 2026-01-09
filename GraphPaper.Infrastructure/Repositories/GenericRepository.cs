@@ -4,7 +4,7 @@ using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System.Linq.Expressions;
 
-namespace MovieTheater.Infrastructure.Repositories;
+namespace GraphPaper.Infrastructure.Repositories;
 
 public class GenericRepository<TEntity> : IGenericRepository<TEntity> where TEntity : BaseEntity
 {

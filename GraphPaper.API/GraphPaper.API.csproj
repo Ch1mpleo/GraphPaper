@@ -20,4 +20,8 @@
     <ProjectReference Include="..\GraphPaper.Application\GraphPaper.Application.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Controllers\" />
+  </ItemGroup>
+
 </Project>
