@@ -39,6 +39,22 @@
     volumes:
       - pg_graph_data:/var/lib/postgresql/data
 
+
+  graphpaper.parser:
+    image: ghcr.io/docling-project/docling-serve-cpu:latest
+    container_name: graphpaper_parser
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=1    # Enables the playground at /ui
+      - DOCLING_SERVE_ENABLE_DOCS=1  # Enables Swagger docs at /docs
+    ports:
+      - "5001:5001"
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+
   # Nào xài thì mở
   # graphpaper.minio:
   #   image: minio/minio
