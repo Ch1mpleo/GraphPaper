@@ -19,9 +19,9 @@
       - JWT__Audience=GraphPaper_Audience
       
       # Storage Settings (MinIO)
-      - MINIO_ENDPOINT=graphpaper.minio:9000
-      - MINIO_ACCESS_KEY=minioadmin 
-      - MINIO_SECRET_KEY=minioadmin
+      # - MINIO_ENDPOINT=graphpaper.minio:9000
+      # - MINIO_ACCESS_KEY=minioadmin 
+      # - MINIO_SECRET_KEY=minioadmin
     ports:
       - "5000:8080"
 
@@ -40,19 +40,39 @@
       - pg_graph_data:/var/lib/postgresql/data
 
 
+  # CPU version
+  # graphpaper.parser:
+  #   image: ghcr.io/docling-project/docling-serve-cpu:latest
+  #   container_name: graphpaper_parser
+  #   environment:
+  #     - DOCLING_SERVE_ENABLE_UI=1    Enables the playground at /ui
+  #     - DOCLING_SERVE_ENABLE_DOCS=1  Enables Swagger docs at /docs
+  #   ports:
+  #     - "5001:5001"
+  #   restart: always
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 4G
+
+
+  # GPU version
   graphpaper.parser:
-    image: ghcr.io/docling-project/docling-serve-cpu:latest
+    image: ghcr.io/docling-project/docling-serve-cu124:latest
     container_name: graphpaper_parser
     environment:
-      - DOCLING_SERVE_ENABLE_UI=1    # Enables the playground at /ui
-      - DOCLING_SERVE_ENABLE_DOCS=1  # Enables Swagger docs at /docs
+      - DOCLING_SERVE_ENABLE_UI=1
+      - DOCLING_SERVE_ENABLE_DOCS=1
     ports:
       - "5001:5001"
     restart: always
     deploy:
       resources:
-        limits:
-          memory: 4G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 
   # Nào xài thì mở
