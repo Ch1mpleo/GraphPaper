@@ -1,4 +1,6 @@
-﻿using GraphPaper.Domain;
+﻿using GraphPaper.Application.Interfaces;
+using GraphPaper.Application.Services;
+using GraphPaper.Domain;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Infrastructure;
 using GraphPaper.Infrastructure.Commons;
@@ -16,6 +18,12 @@ public static class IocContainer
 {
     public static IServiceCollection SetupIocContainer(this IServiceCollection services)
     {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", true, true)
+            .AddEnvironmentVariables()
+            .Build();
+
         //Add Logger
         //services.AddScoped<ILoggerService, LoggerService>();
 
@@ -28,6 +36,9 @@ public static class IocContainer
 
         //Add business services
         services.SetupBusinessServicesLayer();
+
+        //Add Service
+        services.SetupAiServices(configuration);
 
         services.SetupJwt();
 
@@ -155,6 +166,17 @@ public static class IocContainer
             options.AddPolicy("CustomerPolicy", policy =>
                 policy.RequireRole(User.RoleCustomer));
         });
+
+        return services;
+    }
+
+    private static IServiceCollection SetupAiServices(this IServiceCollection services, IConfiguration configuration)
+    {
+        var apiKey = configuration["GEMINI_API_KEY"]
+                     ?? throw new InvalidOperationException("Gemini API Key is missing.");
+
+        // Register as Singleton (Client is thread-safe)
+        services.AddSingleton<IEmbeddingService>(new GeminiEmbeddingService(apiKey));
 
         return services;
     }

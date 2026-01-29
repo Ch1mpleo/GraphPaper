@@ -10,9 +10,5 @@
     <ProjectReference Include="..\GraphPaper.Infrastructure\GraphPaper.Infrastructure.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="Services\" />
-    <Folder Include="Interfaces\" />
-  </ItemGroup>
 
 </Project>
