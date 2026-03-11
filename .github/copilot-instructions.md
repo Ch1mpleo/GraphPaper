@@ -25,3 +25,7 @@ You can also use `dotnet watch test` to run the tests automatically when you cha
 3. Don't create unnecessary md files after implementing a feature.
 
 4. Fix any compiler warnings and errors before going to the next step.
+
+## GPU Usage
+
+For optimal performance, use the GPU version of `docling-serve` with an NVIDIA RTX 5060 Ti 16GB GPU.

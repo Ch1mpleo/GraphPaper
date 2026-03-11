@@ -23,7 +23,7 @@
       # - MINIO_ACCESS_KEY=minioadmin 
       # - MINIO_SECRET_KEY=minioadmin
     ports:
-      - "5000:8080"
+      - "5000:5000"
 
   graphpaper.database:
     # IMPORTANT: Xài chuẩn pgvector image cho AI support
@@ -40,13 +40,13 @@
       - pg_graph_data:/var/lib/postgresql/data
 
 
-  # CPU version
+  # CPU version (fallback if no compatible GPU)
   # graphpaper.parser:
   #   image: ghcr.io/docling-project/docling-serve-cpu:latest
   #   container_name: graphpaper_parser
   #   environment:
-  #     - DOCLING_SERVE_ENABLE_UI=1    Enables the playground at /ui
-  #     - DOCLING_SERVE_ENABLE_DOCS=1  Enables Swagger docs at /docs
+  #     - DOCLING_SERVE_ENABLE_UI=1
+  #     - DOCLING_SERVE_ENABLE_DOCS=1
   #   ports:
   #     - "5001:5001"
   #   restart: always
@@ -56,13 +56,15 @@
   #         memory: 4G
 
 
-  # GPU version
+  # GPU version (RTX 5060 Ti - Blackwell SM 120)
   graphpaper.parser:
-    image: ghcr.io/docling-project/docling-serve-cu124:latest
+    image: ghcr.io/docling-project/docling-serve-cu126:latest
     container_name: graphpaper_parser
     environment:
       - DOCLING_SERVE_ENABLE_UI=1
       - DOCLING_SERVE_ENABLE_DOCS=1
+      - TORCH_CUDA_ARCH_LIST=12.0
+      - CUDA_VISIBLE_DEVICES=0
     ports:
       - "5001:5001"
     restart: always

@@ -10,24 +10,30 @@ namespace GraphPaper.Application.Services
         private readonly string _apiKey;
         private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
         private const string ModelId = "text-embedding-004";
+        private const int MaxParallelRequests = 5;
 
-        public GeminiEmbeddingService(string apiKey)
+        private static readonly JsonSerializerOptions JsonOptions = new()
         {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        public GeminiEmbeddingService(HttpClient httpClient, string apiKey)
+        {
+            _httpClient = httpClient;
             _apiKey = apiKey;
-            _httpClient = new HttpClient();
         }
 
         public async Task<float[]> GetEmbeddingAsync(string text)
         {
             var url = $"{BaseUrl}{ModelId}:embedContent?key={_apiKey}";
-            
+
             var request = new
             {
                 content = new
                 {
                     parts = new[]
                     {
-                        new { text = text }
+                        new { text }
                     }
                 }
             };
@@ -36,27 +42,34 @@ namespace GraphPaper.Application.Services
             response.EnsureSuccessStatusCode();
 
             var jsonResponse = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
+            var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, JsonOptions);
 
-            return result?.Embedding?.Values ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
+            return result?.Embedding?.Values
+                   ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
         }
 
         public async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
         {
-            var results = new List<float[]>();
+            var results = new float[texts.Count][];
 
-            // Process each text individually since Gemini doesn't have a batch endpoint
-            // For better performance, you could implement Task.WhenAll for parallel processing
-            foreach (var text in texts)
+            // Process in parallel with a concurrency limit to avoid rate limiting
+            using var semaphore = new SemaphoreSlim(MaxParallelRequests);
+            var tasks = texts.Select(async (text, index) =>
             {
-                var embedding = await GetEmbeddingAsync(text);
-                results.Add(embedding);
-            }
+                await semaphore.WaitAsync();
+                try
+                {
+                    results[index] = await GetEmbeddingAsync(text);
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
 
-            return results;
+            await Task.WhenAll(tasks);
+
+            return [.. results];
         }
 
         private class EmbeddingResponse

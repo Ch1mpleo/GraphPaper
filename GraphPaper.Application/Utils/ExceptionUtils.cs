@@ -1,6 +1,5 @@
 ﻿using GraphPaper.Application.Utils;
 
-namespace MovieTheater.Application.Utils;
 
 public static class ExceptionUtils
 {

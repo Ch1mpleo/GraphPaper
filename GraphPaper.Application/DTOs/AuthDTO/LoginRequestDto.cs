@@ -1,0 +1,15 @@
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+
+
+public class LoginRequestDto
+{
+    [Required(ErrorMessage = "Email is required")]
+    [EmailAddress(ErrorMessage = "Invalid email format")]
+    [DefaultValue("admin@triptogether.com")]
+    public string Email { get; set; } = "admin@triptogether.com";
+
+    [Required(ErrorMessage = "Password is required")]
+    [DefaultValue("Admin@123")]
+    public string Password { get; set; } = "Admin@123";
+}

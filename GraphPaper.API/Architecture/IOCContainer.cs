@@ -76,6 +76,11 @@ public static class IocContainer
         services.AddScoped<IClaimsService, ClaimsService>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 
+        services.AddSingleton<IDocumentParserService, DocumentParserService>();
+        services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
+        services.AddScoped<IDocumentReviewService, DocumentReviewService>();
+        services.AddScoped<IAuthService, AuthService>();
+
         services.AddHttpContextAccessor();
 
         return services;
@@ -175,8 +180,21 @@ public static class IocContainer
         var apiKey = configuration["GEMINI_API_KEY"]
                      ?? throw new InvalidOperationException("Gemini API Key is missing.");
 
-        // Register as Singleton (Client is thread-safe)
-        services.AddSingleton<IEmbeddingService>(new GeminiEmbeddingService(apiKey));
+        // Named HttpClients managed by IHttpClientFactory (avoids socket exhaustion)
+        services.AddHttpClient("GeminiEmbedding");
+        services.AddHttpClient("GeminiKnowledge");
+
+        services.AddSingleton<IEmbeddingService>(sp =>
+        {
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GeminiEmbedding");
+            return new GeminiEmbeddingService(httpClient, apiKey);
+        });
+
+        services.AddSingleton<IKnowledgeExtractionService>(sp =>
+        {
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GeminiKnowledge");
+            return new GeminiKnowledgeExtractionService(httpClient, apiKey);
+        });
 
         return services;
     }
