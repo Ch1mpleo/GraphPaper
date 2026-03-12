@@ -10,12 +10,12 @@
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       # Connection String
-      - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
 
       # AI & Auth Settings
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - JWT__SecretKey=${JWT_SECRET_KEY}
+      - GEMINI_API_KEY=AIzaSyCLR6dzPptw64QainOg4_8R7OD5IjkTir0
+      - GROQ_API_KEY=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
+      - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
       
@@ -32,9 +32,9 @@
     container_name: graphpaper_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: graphpaper_db
     ports:
       - "5434:5432"
     volumes:
