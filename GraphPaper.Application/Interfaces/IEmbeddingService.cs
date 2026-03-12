@@ -3,8 +3,8 @@
     public interface IEmbeddingService
     {
         /// <summary>
-        /// Transforms a single text chunk into a vector (dimension varies by model).
-        /// Gemini text-embedding-004 produces 768-dimension vectors.
+        /// Transforms a single text chunk into a vector.
+        /// gemini-embedding-exp-03-07 configured to produce 1536-dimension vectors.
         /// </summary>
         Task<float[]> GetEmbeddingAsync(string text);
 

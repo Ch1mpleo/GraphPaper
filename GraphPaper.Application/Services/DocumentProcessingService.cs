@@ -100,21 +100,31 @@ public class DocumentProcessingService : IDocumentProcessingService
             await _unitOfWork.SaveChangesAsync();
 
             // 8. Extract knowledge graph (entities + relationships) from each chunk
-            var allEntities = new List<ExtractedEntity>();
-            var allRelationships = new List<ExtractedRelationship>();
-
-            foreach (var chunk in chunks)
+            // Saves per-chunk so that one failure doesn't lose all previous extractions
+            // Delay between calls to respect free-tier per-minute rate limits
+            for (int i = 0; i < chunks.Count; i++)
             {
-                var extraction = await _knowledgeExtractionService.ExtractFromChunkAsync(chunk);
-                allEntities.AddRange(extraction.Entities);
-                allRelationships.AddRange(extraction.Relationships);
+                try
+                {
+                    if (i > 0)
+                        await Task.Delay(TimeSpan.FromSeconds(4));
+
+                    var extraction = await _knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
+
+                    if (extraction.Entities.Count > 0)
+                        await _unitOfWork.ExtractedEntities.AddRangeAsync(extraction.Entities);
+
+                    if (extraction.Relationships.Count > 0)
+                        await _unitOfWork.ExtractedRelationships.AddRangeAsync(extraction.Relationships);
+
+                    await _unitOfWork.SaveChangesAsync();
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    // Rate limit, timeout, or API error — stop extraction, keep what's already saved
+                    break;
+                }
             }
-
-            if (allEntities.Count > 0)
-                await _unitOfWork.ExtractedEntities.AddRangeAsync(allEntities);
-
-            if (allRelationships.Count > 0)
-                await _unitOfWork.ExtractedRelationships.AddRangeAsync(allRelationships);
 
             // 9. Mark document as Ready
             document.Status = DocumentStatus.Ready;

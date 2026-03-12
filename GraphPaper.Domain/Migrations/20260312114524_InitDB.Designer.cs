@@ -13,8 +13,8 @@ using Pgvector;
 namespace GraphPaper.Domain.Migrations
 {
     [DbContext(typeof(GraphPaperDbContext))]
-    [Migration("20260109145059_InitDb")]
-    partial class InitDb
+    [Migration("20260312114524_InitDB")]
+    partial class InitDB
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

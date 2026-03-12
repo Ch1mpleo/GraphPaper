@@ -177,23 +177,28 @@ public static class IocContainer
 
     private static IServiceCollection SetupAiServices(this IServiceCollection services, IConfiguration configuration)
     {
-        var apiKey = configuration["GEMINI_API_KEY"]
-                     ?? throw new InvalidOperationException("Gemini API Key is missing.");
+        var geminiApiKey = configuration["GEMINI_API_KEY"]
+                           ?? throw new InvalidOperationException("Gemini API Key is missing.");
+        var groqApiKey = configuration["GROQ_API_KEY"]
+                         ?? throw new InvalidOperationException("Groq API Key is missing.");
 
         // Named HttpClients managed by IHttpClientFactory (avoids socket exhaustion)
         services.AddHttpClient("GeminiEmbedding");
-        services.AddHttpClient("GeminiKnowledge");
+        services.AddHttpClient("GroqKnowledge", client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(5);
+        });
 
         services.AddSingleton<IEmbeddingService>(sp =>
         {
             var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GeminiEmbedding");
-            return new GeminiEmbeddingService(httpClient, apiKey);
+            return new GeminiEmbeddingService(httpClient, geminiApiKey);
         });
 
         services.AddSingleton<IKnowledgeExtractionService>(sp =>
         {
-            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GeminiKnowledge");
-            return new GeminiKnowledgeExtractionService(httpClient, apiKey);
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GroqKnowledge");
+            return new GroqKnowledgeExtractionService(httpClient, groqApiKey);
         });
 
         return services;

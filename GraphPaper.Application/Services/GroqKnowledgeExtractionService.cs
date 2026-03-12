@@ -1,16 +1,17 @@
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace GraphPaper.Application.Services;
 
-public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
+public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 {
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
-    private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
-    private const string ModelId = "gemini-2.5-flash-lite";
+    private const string BaseUrl = "https://api.groq.com/openai/v1/chat/completions";
+    private const string ModelId = "llama-3.3-70b-versatile";
     private const int MaxRetries = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -19,48 +20,42 @@ public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
         PropertyNameCaseInsensitive = true
     };
 
-    public GeminiKnowledgeExtractionService(HttpClient httpClient, string apiKey)
+    public GroqKnowledgeExtractionService(HttpClient httpClient, string apiKey)
     {
-        _apiKey = apiKey;
         _httpClient = httpClient;
+        _apiKey = apiKey;
     }
 
     public async Task<KnowledgeExtractionResult> ExtractFromChunkAsync(DocumentChunk chunk)
     {
-        var url = $"{BaseUrl}{ModelId}:generateContent?key={_apiKey}";
-
         var prompt = BuildExtractionPrompt(chunk.Content);
 
         var request = new
         {
-            contents = new[]
+            model = ModelId,
+            messages = new[]
             {
-                new
-                {
-                    parts = new[]
-                    {
-                        new { text = prompt }
-                    }
-                }
+                new { role = "system", content = "You are a knowledge graph extraction assistant. Always respond with valid JSON only." },
+                new { role = "user", content = prompt }
             },
-            generationConfig = new
-            {
-                responseMimeType = "application/json",
-                temperature = 0.1
-            }
+            temperature = 0.1,
+            response_format = new { type = "json_object" }
         };
 
-        // Retry with exponential backoff for 429 rate limits
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
         {
-            var response = await _httpClient.PostAsJsonAsync(url, request);
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BaseUrl);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            httpRequest.Content = JsonContent.Create(request);
+
+            var response = await _httpClient.SendAsync(httpRequest);
 
             if (response.IsSuccessStatusCode)
             {
                 var jsonResponse = await response.Content.ReadAsStringAsync();
-                var geminiResult = JsonSerializer.Deserialize<GeminiResponse>(jsonResponse, JsonOptions);
+                var groqResult = JsonSerializer.Deserialize<GroqResponse>(jsonResponse, JsonOptions);
 
-                var text = geminiResult?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text;
+                var text = groqResult?.Choices?.FirstOrDefault()?.Message?.Content;
 
                 if (string.IsNullOrWhiteSpace(text))
                     return new KnowledgeExtractionResult();
@@ -73,18 +68,16 @@ public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
                 return MapToEntities(extraction, chunk.Id);
             }
 
-            // Handle 429 rate limit with retry
             if ((int)response.StatusCode == 429 && attempt < MaxRetries)
             {
-                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt + 1)); // 2s, 4s, 8s
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
                 await Task.Delay(delay);
                 continue;
             }
 
-            // Non-retryable error
             var errorBody = await response.Content.ReadAsStringAsync();
             throw new HttpRequestException(
-                $"Gemini Knowledge API returned {(int)response.StatusCode}: {errorBody}");
+                $"Groq API returned {(int)response.StatusCode}: {errorBody}");
         }
 
         return new KnowledgeExtractionResult();
@@ -125,7 +118,6 @@ public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
     {
         var result = new KnowledgeExtractionResult();
 
-        // Build entity lookup: name → entity
         var entityLookup = new Dictionary<string, ExtractedEntity>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var e in schema.Entities ?? [])
@@ -146,7 +138,6 @@ public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
             result.Entities.Add(entity);
         }
 
-        // Build relationships referencing entity Ids
         foreach (var r in schema.Relationships ?? [])
         {
             if (string.IsNullOrWhiteSpace(r.Source) || string.IsNullOrWhiteSpace(r.Target)) continue;
@@ -166,26 +157,21 @@ public class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
         return result;
     }
 
-    #region Gemini Response Models
+    #region Groq Response Models
 
-    private class GeminiResponse
+    private class GroqResponse
     {
-        public List<Candidate>? Candidates { get; set; }
+        public List<Choice>? Choices { get; set; }
     }
 
-    private class Candidate
+    private class Choice
     {
-        public ContentBlock? Content { get; set; }
+        public Message? Message { get; set; }
     }
 
-    private class ContentBlock
+    private class Message
     {
-        public List<Part>? Parts { get; set; }
-    }
-
-    private class Part
-    {
-        public string? Text { get; set; }
+        public string? Content { get; set; }
     }
 
     #endregion

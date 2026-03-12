@@ -9,8 +9,9 @@ namespace GraphPaper.Application.Services
         private readonly HttpClient _httpClient;
         private readonly string _apiKey;
         private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
-        private const string ModelId = "text-embedding-004";
+        private const string ModelId = "gemini-embedding-2-preview";
         private const int MaxParallelRequests = 5;
+        private const int OutputDimensionality = 1536;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -23,8 +24,16 @@ namespace GraphPaper.Application.Services
             _apiKey = apiKey;
         }
 
+        private const int MaxTextLength = 8000;
+
         public async Task<float[]> GetEmbeddingAsync(string text)
         {
+            if (string.IsNullOrWhiteSpace(text))
+                throw new ArgumentException("Text cannot be empty for embedding.");
+
+            if (text.Length > MaxTextLength)
+                text = text[..MaxTextLength];
+
             var url = $"{BaseUrl}{ModelId}:embedContent?key={_apiKey}";
 
             var request = new
@@ -35,11 +44,18 @@ namespace GraphPaper.Application.Services
                     {
                         new { text }
                     }
-                }
+                },
+                outputDimensionality = OutputDimensionality
             };
 
             var response = await _httpClient.PostAsJsonAsync(url, request);
-            response.EnsureSuccessStatusCode();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                throw new HttpRequestException(
+                    $"Gemini Embedding API returned {(int)response.StatusCode}: {errorBody}");
+            }
 
             var jsonResponse = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, JsonOptions);

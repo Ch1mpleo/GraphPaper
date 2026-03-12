@@ -6,15 +6,16 @@
       dockerfile: GraphPaper.API/Dockerfile
     depends_on:
       graphpaper.database:
-        condition: service_started
+        condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       # Connection String
-      - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
-      
+      - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+
       # AI & Auth Settings
-      - GEMINI_API_KEY=AIzaSyD8YgqkR7d1gDYL_7cFXRDfYNhQl4glD4k
-      - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - JWT__SecretKey=${JWT_SECRET_KEY}
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
       
@@ -31,13 +32,18 @@
     container_name: graphpaper_db
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: graphpaper_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5434:5432"
     volumes:
       - pg_graph_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d graphpaper_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
 
   # CPU version (fallback if no compatible GPU)
