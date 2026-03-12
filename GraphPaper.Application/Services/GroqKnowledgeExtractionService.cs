@@ -95,7 +95,7 @@ public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             Return ONLY valid JSON in this exact format:
             {
               "entities": [
-                { "name": "entity name", "entityType": "Concept|Person|Method|Technology|Finding|Organization", "description": "brief description" }
+                { "name": "entity name", "entityType": "Concept|Person|Method|Technology|Finding|Organization|...", "description": "fully definition" }
               ],
               "relationships": [
                 { "source": "source entity name", "target": "target entity name", "relationType": "relationship type", "confidenceScore": 0.0 to 1.0 }
