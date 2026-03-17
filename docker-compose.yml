@@ -13,7 +13,7 @@
       - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
 
       # AI & Auth Settings
-      - GEMINI_API_KEY=AIzaSyCLR6dzPptw64QainOg4_8R7OD5IjkTir0
+      - GEMINI_API_KEY=AIzaSyCWcxoOaPz8Zab0N4yHvOMqj8Y0qQbdIrM
       - GROQ_API_KEY=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
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
@@ -64,13 +64,15 @@
 
   # GPU version (RTX 5060 Ti - Blackwell SM 120)
   graphpaper.parser:
-    image: ghcr.io/docling-project/docling-serve-cu126:latest
+    image: ghcr.io/docling-project/docling-serve-cu128:latest
     container_name: graphpaper_parser
     environment:
       - DOCLING_SERVE_ENABLE_UI=1
       - DOCLING_SERVE_ENABLE_DOCS=1
       - TORCH_CUDA_ARCH_LIST=12.0
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     ports:
       - "5001:5001"
     restart: always
@@ -79,8 +81,8 @@
         reservations:
           devices:
             - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+              count: all
+              capabilities: [gpu, compute, utility]
 
 
   # Nào xài thì mở
