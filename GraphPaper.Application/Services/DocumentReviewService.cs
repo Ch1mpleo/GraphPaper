@@ -1,7 +1,6 @@
 using GraphPaper.Application.DTOs.DocumentDTO;
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Application.Utils;
-using GraphPaper.Infrastructure.Commons;
 using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.EntityFrameworkCore;
 

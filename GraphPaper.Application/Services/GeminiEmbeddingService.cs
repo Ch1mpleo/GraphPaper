@@ -6,6 +6,8 @@ namespace GraphPaper.Application.Services;
 
 public sealed class GeminiEmbeddingService : IEmbeddingService
 {
+    private const int BatchSize = 10;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _apiKey;
     private const string ModelId = "gemini-embedding-2-preview";
@@ -30,13 +32,58 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Text cannot be empty for embedding.", nameof(text));
 
-        if (text.Length > MaxTextLength)
-            text = text[..MaxTextLength];
+        var normalizedText = NormalizeText(text);
 
         using var client = _httpClientFactory.CreateClient("Gemini");
         var url = $"v1beta/models/{ModelId}:embedContent?key={_apiKey}";
+        var request = BuildEmbeddingRequest(normalizedText);
 
-        var request = new
+        using var response = await client.PostAsJsonAsync(url, request);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync();
+            throw new HttpRequestException(
+                $"Gemini Embedding API returned {(int)response.StatusCode}: {errorBody}");
+        }
+
+        return await DeserializeEmbeddingAsync(response);
+    }
+
+    public async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
+    {
+        ArgumentNullException.ThrowIfNull(texts);
+
+        var results = new float[texts.Count][];
+
+        foreach (var batch in texts.Select((text, index) => (text, index)).Chunk(BatchSize))
+        {
+            using var throttler = new SemaphoreSlim(MaxParallelRequests, MaxParallelRequests);
+
+            var tasks = batch.Select(async item =>
+            {
+                await throttler.WaitAsync();
+                try
+                {
+                    results[item.index] = await GetEmbeddingAsync(item.text);
+                }
+                finally
+                {
+                    throttler.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+
+            await Task.Delay(100);
+        }
+
+        return [.. results];
+    }
+
+    private static object BuildEmbeddingRequest(string text)
+    {
+        return new
         {
             content = new
             {
@@ -47,16 +94,10 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
             },
             outputDimensionality = OutputDimensionality
         };
+    }
 
-        var response = await client.PostAsJsonAsync(url, request);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorBody = await response.Content.ReadAsStringAsync();
-            throw new HttpRequestException(
-                $"Gemini Embedding API returned {(int)response.StatusCode}: {errorBody}");
-        }
-
+    private static async Task<float[]> DeserializeEmbeddingAsync(HttpResponseMessage response)
+    {
         var jsonResponse = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, JsonOptions);
 
@@ -64,21 +105,12 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
                ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
     }
 
-    public async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
+    private static string NormalizeText(string text)
     {
-        const int batchSize = 10;
-        var results = new List<float[]>(texts.Count);
+        if (text.Length > MaxTextLength)
+            return text[..MaxTextLength];
 
-        foreach (var batch in texts.Chunk(batchSize))
-        {
-            var tasks = batch.Select(GetEmbeddingAsync);
-            var batchResults = await Task.WhenAll(tasks);
-            results.AddRange(batchResults);
-
-            await Task.Delay(100);
-        }
-
-        return results;
+        return text;
     }
 
     private sealed class EmbeddingResponse

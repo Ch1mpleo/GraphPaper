@@ -2,17 +2,22 @@ using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 
 namespace GraphPaper.Application.Services;
 
-public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
+public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 {
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _apiKey;
-    private const string BaseUrl = "https://api.groq.com/openai/v1/chat/completions";
-    private const string ModelId = "llama-3.3-70b-versatile";
-    private const int MaxRetries = 3;
+    private const string BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
+    private const string MODEL_ID = "llama-3.3-70b-versatile";
+    private const int MAX_RETRIES = 3;
+    private const int MAX_CHUNK_LENGTH = 6000;
+    private const float MIN_RELATIONSHIP_CONFIDENCE = 0.35f;
+    private const string SYSTEM_PROMPT = "You are a knowledge graph extraction assistant. Always respond with valid JSON only.";
+    private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -20,55 +25,31 @@ public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         PropertyNameCaseInsensitive = true
     };
 
-    public GroqKnowledgeExtractionService(HttpClient httpClient, string apiKey)
+    public GroqKnowledgeExtractionService(IHttpClientFactory httpClientFactory, string apiKey)
     {
-        _httpClient = httpClient;
+        _httpClientFactory = httpClientFactory;
         _apiKey = apiKey;
     }
 
     public async Task<KnowledgeExtractionResult> ExtractFromChunkAsync(DocumentChunk chunk)
     {
-        var prompt = BuildExtractionPrompt(chunk.Content);
+        ArgumentNullException.ThrowIfNull(chunk);
 
-        var request = new
-        {
-            model = ModelId,
-            messages = new[]
-            {
-                new { role = "system", content = "You are a knowledge graph extraction assistant. Always respond with valid JSON only." },
-                new { role = "user", content = prompt }
-            },
-            temperature = 0.1,
-            response_format = new { type = "json_object" }
-        };
+        using var client = _httpClientFactory.CreateClient("GroqKnowledge");
+        var request = BuildRequest(chunk.Content);
 
-        for (int attempt = 0; attempt <= MaxRetries; attempt++)
+        for (var attempt = 0; attempt <= MAX_RETRIES; attempt++)
         {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BaseUrl);
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BASE_URL);
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
             httpRequest.Content = JsonContent.Create(request);
 
-            var response = await _httpClient.SendAsync(httpRequest);
+            using var response = await client.SendAsync(httpRequest);
 
             if (response.IsSuccessStatusCode)
-            {
-                var jsonResponse = await response.Content.ReadAsStringAsync();
-                var groqResult = JsonSerializer.Deserialize<GroqResponse>(jsonResponse, JsonOptions);
+                return await ParseSuccessResponseAsync(response, chunk.Id);
 
-                var text = groqResult?.Choices?.FirstOrDefault()?.Message?.Content;
-
-                if (string.IsNullOrWhiteSpace(text))
-                    return new KnowledgeExtractionResult();
-
-                var extraction = JsonSerializer.Deserialize<ExtractionSchema>(text, JsonOptions);
-
-                if (extraction is null)
-                    return new KnowledgeExtractionResult();
-
-                return MapToEntities(extraction, chunk.Id);
-            }
-
-            if ((int)response.StatusCode == 429 && attempt < MaxRetries)
+            if ((int)response.StatusCode == 429 && attempt < MAX_RETRIES)
             {
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
                 await Task.Delay(delay);
@@ -83,8 +64,42 @@ public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         return new KnowledgeExtractionResult();
     }
 
+    private static object BuildRequest(string chunkContent)
+    {
+        var prompt = BuildExtractionPrompt(chunkContent);
+
+        return new
+        {
+            model = MODEL_ID,
+            messages = new[]
+            {
+                new { role = "system", content = SYSTEM_PROMPT },
+                new { role = "user", content = prompt }
+            },
+            temperature = 0.1,
+            response_format = new { type = "json_object" }
+        };
+    }
+
+    private static async Task<KnowledgeExtractionResult> ParseSuccessResponseAsync(HttpResponseMessage response, Guid chunkId)
+    {
+        var jsonResponse = await response.Content.ReadAsStringAsync();
+        var groqResult = JsonSerializer.Deserialize<GroqResponse>(jsonResponse, JsonOptions);
+        var text = groqResult?.Choices?.FirstOrDefault()?.Message?.Content;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return new KnowledgeExtractionResult();
+
+        if (!TryDeserializeExtraction(text, out var extraction) || extraction is null)
+            return new KnowledgeExtractionResult();
+
+        return MapToEntities(extraction, chunkId);
+    }
+
     private static string BuildExtractionPrompt(string chunkContent)
     {
+        var normalizedChunkContent = NormalizeChunkContent(chunkContent);
+
         return $$"""
             Analyze the following text and extract knowledge graph data.
 
@@ -107,10 +122,11 @@ public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             - Relationship source/target must exactly match an entity name
             - relationType examples: "is_based_on", "uses", "improves", "authored_by", "part_of", "related_to"
             - confidenceScore: how confident you are about this relationship (0.0 to 1.0)
+            - Ignore markdown-only lines and data URI image blocks
             - If no entities found, return {"entities": [], "relationships": []}
 
             Text:
-            {{chunkContent}}
+            {{normalizedChunkContent}}
             """;
     }
 
@@ -122,39 +138,92 @@ public class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 
         foreach (var e in schema.Entities ?? [])
         {
-            if (string.IsNullOrWhiteSpace(e.Name)) continue;
-            if (entityLookup.ContainsKey(e.Name)) continue;
+            var entityName = NormalizeEntityName(e.Name);
+            if (string.IsNullOrWhiteSpace(entityName)) continue;
+            if (entityLookup.ContainsKey(entityName)) continue;
 
             var entity = new ExtractedEntity
             {
                 Id = Guid.NewGuid(),
                 ChunkId = chunkId,
-                Name = e.Name.Trim(),
-                EntityType = e.EntityType?.Trim() ?? "Concept",
-                Description = e.Description?.Trim() ?? string.Empty
+                Name = entityName,
+                EntityType = NormalizeWhitespace(e.EntityType) is { Length: > 0 } type ? type : "Concept",
+                Description = NormalizeWhitespace(e.Description)
             };
 
-            entityLookup[e.Name] = entity;
+            entityLookup[entityName] = entity;
             result.Entities.Add(entity);
         }
 
         foreach (var r in schema.Relationships ?? [])
         {
-            if (string.IsNullOrWhiteSpace(r.Source) || string.IsNullOrWhiteSpace(r.Target)) continue;
-            if (!entityLookup.TryGetValue(r.Source, out var sourceEntity)) continue;
-            if (!entityLookup.TryGetValue(r.Target, out var targetEntity)) continue;
+            var source = NormalizeEntityName(r.Source);
+            var target = NormalizeEntityName(r.Target);
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target)) continue;
+            if (!entityLookup.TryGetValue(source, out var sourceEntity)) continue;
+            if (!entityLookup.TryGetValue(target, out var targetEntity)) continue;
+
+            var confidence = Math.Clamp(r.ConfidenceScore, 0f, 1f);
+            if (confidence < MIN_RELATIONSHIP_CONFIDENCE) continue;
 
             result.Relationships.Add(new ExtractedRelationship
             {
                 Id = Guid.NewGuid(),
                 SourceEntityId = sourceEntity.Id,
                 TargetEntityId = targetEntity.Id,
-                RelationType = r.RelationType?.Trim() ?? "related_to",
-                ConfidenceScore = Math.Clamp(r.ConfidenceScore, 0f, 1f)
+                RelationType = NormalizeWhitespace(r.RelationType) is { Length: > 0 } relationType ? relationType : "related_to",
+                ConfidenceScore = confidence
             });
         }
 
         return result;
+    }
+
+    private static bool TryDeserializeExtraction(string content, out ExtractionSchema? extraction)
+    {
+        extraction = JsonSerializer.Deserialize<ExtractionSchema>(content, JsonOptions);
+        if (extraction is not null)
+            return true;
+
+        var firstBrace = content.IndexOf('{');
+        var lastBrace = content.LastIndexOf('}');
+        if (firstBrace < 0 || lastBrace <= firstBrace)
+            return false;
+
+        var candidate = content[firstBrace..(lastBrace + 1)];
+        extraction = JsonSerializer.Deserialize<ExtractionSchema>(candidate, JsonOptions);
+        return extraction is not null;
+    }
+
+    private static string NormalizeChunkContent(string chunkContent)
+    {
+        if (string.IsNullOrWhiteSpace(chunkContent))
+            return string.Empty;
+
+        var normalized = chunkContent.Trim();
+        if (normalized.Length > MAX_CHUNK_LENGTH)
+            normalized = normalized[..MAX_CHUNK_LENGTH];
+
+        return normalized;
+    }
+
+    private static string NormalizeEntityName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var normalized = NormalizeWhitespace(value)
+            .Trim('#', '*', '-', '`', ' ');
+
+        return normalized;
+    }
+
+    private static string NormalizeWhitespace(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return MultiSpaceRegex.Replace(value.Trim(), " ");
     }
 
     #region Groq Response Models

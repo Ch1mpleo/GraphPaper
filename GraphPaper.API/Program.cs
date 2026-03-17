@@ -110,8 +110,8 @@ catch (Exception e)
 
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapControllers();
 app.UseSession();
+app.MapControllers();
 
 
 app.Run();

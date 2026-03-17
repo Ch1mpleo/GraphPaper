@@ -13,8 +13,8 @@
       - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
 
       # AI & Auth Settings
-      - GEMINI_API_KEY=AIzaSyCWcxoOaPz8Zab0N4yHvOMqj8Y0qQbdIrM
-      - GROQ_API_KEY=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
+      - GEMINI_API_KEY=AIzaSyD8FJHoheKZpwoki0xCIY_mkbboPzLrlu0
+      - GROQ_API_KEY=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
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
@@ -45,27 +45,11 @@
       timeout: 3s
       retries: 10
 
-
-  # CPU version (fallback if no compatible GPU)
-  # graphpaper.parser:
-  #   image: ghcr.io/docling-project/docling-serve-cpu:latest
-  #   container_name: graphpaper_parser
-  #   environment:
-  #     - DOCLING_SERVE_ENABLE_UI=1
-  #     - DOCLING_SERVE_ENABLE_DOCS=1
-  #   ports:
-  #     - "5001:5001"
-  #   restart: always
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 4G
-
-
   # GPU version (RTX 5060 Ti - Blackwell SM 120)
   graphpaper.parser:
     image: ghcr.io/docling-project/docling-serve-cu128:latest
     container_name: graphpaper_parser
+    gpus: all
     environment:
       - DOCLING_SERVE_ENABLE_UI=1
       - DOCLING_SERVE_ENABLE_DOCS=1

@@ -30,6 +30,14 @@ You can also use `dotnet watch test` to run the tests automatically when you cha
 
 6. Fix any compiler warnings and errors before going to the next step.
 
+### Document Parsing Strategy
+
+- Prefer a single document parsing strategy (Docling or PdfPig/OpenXml) or introduce an explicit router; avoid registering Docling without using it in the processing pipeline.
+
 ## GPU Usage
 
-For optimal performance, use the GPU version of `docling-serve` with an NVIDIA RTX 5060 Ti 16GB GPU.
+For optimal performance, use the GPU version of `docling-serve` with an NVIDIA RTX 5060 Ti 16GB GPU. Ensure that the parser setup is GPU-only, with no CPU fallback. 
+
+## Docker Configuration
+
+- Make direct changes in `docker-compose.yml` for any necessary configurations.

@@ -1,32 +1,34 @@
 using GraphPaper.Application.Interfaces;
+using GraphPaper.Application.DTOs.DoclingDTO;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Domain.Enums;
 using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Pgvector;
+using System.Text.RegularExpressions;
 
 namespace GraphPaper.Application.Services;
 
 public sealed class DocumentProcessingService : IDocumentProcessingService
 {
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IDocumentParserService _parserService;
-    private readonly IEmbeddingService _embeddingService;
-    private readonly IKnowledgeExtractionService _knowledgeExtractionService;
+    private static readonly TimeSpan ExtractionDelay = TimeSpan.FromSeconds(4);
+    private static readonly Regex DataUriImageRegex = new(@"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
+
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IClaimsService _claimsService;
+    private readonly ILogger<DocumentProcessingService> _logger;
 
     public DocumentProcessingService(
-        IUnitOfWork unitOfWork,
-        IDocumentParserService parserService,
-        IEmbeddingService embeddingService,
-        IKnowledgeExtractionService knowledgeExtractionService,
-        IClaimsService claimsService)
+        IServiceScopeFactory scopeFactory,
+        IClaimsService claimsService,
+        ILogger<DocumentProcessingService> logger)
     {
-        _unitOfWork = unitOfWork;
-        _parserService = parserService;
-        _embeddingService = embeddingService;
-        _knowledgeExtractionService = knowledgeExtractionService;
+        _scopeFactory = scopeFactory;
         _claimsService = claimsService;
+        _logger = logger;
     }
 
     public async Task<Document> IngestAsync(IFormFile file)
@@ -39,102 +41,221 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (userId == Guid.Empty)
             throw new ArgumentException("User id is required.", nameof(userId));
 
-        var document = await SaveDocumentRecordAsync(file, userId);
+        Document document;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            document = await SaveDocumentRecordAsync(file, userId, unitOfWork);
+        }
 
-        await using var fileStream = file.OpenReadStream();
         using var memoryStream = new MemoryStream();
-        await fileStream.CopyToAsync(memoryStream);
-        var fileBytes = memoryStream.ToArray();
+        await file.CopyToAsync(memoryStream);
+        var filePayload = new FilePayload(memoryStream.ToArray(), file.FileName, file.ContentType);
 
-        _ = Task.Run(() => ProcessDocumentAsync(document.Id, file.FileName, fileBytes));
+        _ = Task.Run(async () =>
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            var doclingClient = scope.ServiceProvider.GetRequiredService<IDoclingClient>();
+            var embeddingService = scope.ServiceProvider.GetRequiredService<IEmbeddingService>();
+            var knowledgeExtractionService = scope.ServiceProvider.GetRequiredService<IKnowledgeExtractionService>();
+
+            await ProcessDocumentAsync(
+                document.Id,
+                filePayload,
+                unitOfWork,
+                doclingClient,
+                embeddingService,
+                knowledgeExtractionService,
+                _logger);
+        });
 
         return document;
     }
 
-    private async Task ProcessDocumentAsync(Guid documentId, string fileName, byte[] fileBytes)
+    private static async Task ProcessDocumentAsync(
+        Guid documentId,
+        FilePayload filePayload,
+        IUnitOfWork unitOfWork,
+        IDoclingClient doclingClient,
+        IEmbeddingService embeddingService,
+        IKnowledgeExtractionService knowledgeExtractionService,
+        ILogger logger)
     {
-        var document = await _unitOfWork.Documents.GetByIdAsync(documentId);
+        var document = await unitOfWork.Documents.GetByIdAsync(documentId);
         if (document is null)
             return;
 
         try
         {
-            document.Status = DocumentStatus.Chunking;
-            await _unitOfWork.Documents.Update(document);
-            await _unitOfWork.SaveChangesAsync();
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Chunking);
 
-            using var parseStream = new MemoryStream(fileBytes);
-            var pages = _parserService.Parse(parseStream, fileName);
+            var doclingResult = await doclingClient.ParseAsync(filePayload.FileBytes, filePayload.FileName, filePayload.ContentType);
+            var chunks = BuildChunksFromDocling(doclingResult.Document, document.Id, logger);
 
-            if (pages.Count == 0)
+            if (chunks.Count == 0)
                 throw new InvalidOperationException("Could not extract any text from the document.");
 
-            var chunks = new List<DocumentChunk>();
-            int chunkIndex = 0;
-
-            foreach (var page in pages)
-            {
-                chunks.Add(new DocumentChunk
-                {
-                    Id = Guid.NewGuid(),
-                    DocumentId = document.Id,
-                    ChunkIndex = chunkIndex++,
-                    PageNumber = page.PageNumber,
-                    Content = page.Content
-                });
-            }
-
-            document.Status = DocumentStatus.Extracting;
-            await _unitOfWork.Documents.Update(document);
-            await _unitOfWork.SaveChangesAsync();
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Extracting);
 
             var texts = chunks.Select(c => c.Content).ToList();
-            var embeddings = await _embeddingService.GetBatchEmbeddingsAsync(texts);
+            var embeddings = await embeddingService.GetBatchEmbeddingsAsync(texts);
 
-            for (int i = 0; i < chunks.Count; i++)
-            {
-                chunks[i].Embedding = new Vector(embeddings[i]);
-            }
+            AttachEmbeddings(chunks, embeddings);
 
-            await _unitOfWork.DocumentChunks.AddRangeAsync(chunks);
-            await _unitOfWork.SaveChangesAsync();
+            await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
+            await unitOfWork.SaveChangesAsync();
 
-            for (int i = 0; i < chunks.Count; i++)
-            {
-                try
-                {
-                    if (i > 0)
-                        await Task.Delay(TimeSpan.FromSeconds(4));
+            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
 
-                    var extraction = await _knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
-
-                    if (extraction.Entities.Count > 0)
-                        await _unitOfWork.ExtractedEntities.AddRangeAsync(extraction.Entities);
-
-                    if (extraction.Relationships.Count > 0)
-                        await _unitOfWork.ExtractedRelationships.AddRangeAsync(extraction.Relationships);
-
-                    await _unitOfWork.SaveChangesAsync();
-                }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-                {
-                    break;
-                }
-            }
-
-            document.Status = DocumentStatus.Ready;
-            await _unitOfWork.Documents.Update(document);
-            await _unitOfWork.SaveChangesAsync();
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);
         }
-        catch
+        catch (Exception ex)
         {
-            document.Status = DocumentStatus.Failed;
-            await _unitOfWork.Documents.Update(document);
-            await _unitOfWork.SaveChangesAsync();
+            logger.LogError(ex, "Failed to process document {DocumentId}", documentId);
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Failed);
         }
     }
 
-    private async Task<Document> SaveDocumentRecordAsync(IFormFile file, Guid userId)
+    private static List<DocumentChunk> BuildChunksFromDocling(DoclingDocument? document, Guid documentId, ILogger logger)
+    {
+        if (document is null)
+            return [];
+
+        var chunksFromTextItems = BuildChunksFromTextItems(document.Texts, documentId);
+        if (chunksFromTextItems.Count > 0)
+            return chunksFromTextItems;
+
+        var chunksFromMarkdown = BuildChunksFromMarkdown(document.MarkdownContent, documentId);
+        if (chunksFromMarkdown.Count > 0)
+            logger.LogInformation("Using Docling markdown fallback for document {DocumentId}", documentId);
+
+        return chunksFromMarkdown;
+    }
+
+    private static List<DocumentChunk> BuildChunksFromTextItems(IReadOnlyList<DoclingTextItem>? textItems, Guid documentId)
+    {
+        if (textItems is null || textItems.Count == 0)
+            return [];
+
+        var chunks = new List<DocumentChunk>();
+        var chunkIndex = 0;
+
+        foreach (var textItem in textItems)
+        {
+            var content = textItem.Text.Trim();
+            if (string.IsNullOrWhiteSpace(content))
+                continue;
+
+            chunks.Add(new DocumentChunk
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = documentId,
+                ChunkIndex = chunkIndex++,
+                PageNumber = textItem.Provenance?.FirstOrDefault()?.PageNumber ?? 0,
+                Content = content
+            });
+        }
+
+        return chunks;
+    }
+
+    private static List<DocumentChunk> BuildChunksFromMarkdown(string? markdownContent, Guid documentId)
+    {
+        if (string.IsNullOrWhiteSpace(markdownContent))
+            return [];
+
+        var parts = markdownContent
+            .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+
+        var chunks = new List<DocumentChunk>(parts.Count);
+        for (var i = 0; i < parts.Count; i++)
+        {
+            chunks.Add(new DocumentChunk
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = documentId,
+                ChunkIndex = i,
+                PageNumber = 0,
+                Content = parts[i]
+            });
+        }
+
+        return chunks;
+    }
+
+    private static void AttachEmbeddings(List<DocumentChunk> chunks, IReadOnlyList<float[]> embeddings)
+    {
+        for (var i = 0; i < chunks.Count; i++)
+            chunks[i].Embedding = new Vector(embeddings[i]);
+    }
+
+    private static async Task ExtractKnowledgeAsync(
+        IReadOnlyList<DocumentChunk> chunks,
+        IKnowledgeExtractionService knowledgeExtractionService,
+        IUnitOfWork unitOfWork,
+        ILogger logger)
+    {
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            if (!ShouldExtractKnowledge(chunks[i].Content))
+                continue;
+
+            try
+            {
+                if (i > 0)
+                    await Task.Delay(ExtractionDelay);
+
+                var extraction = await knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
+
+                if (extraction.Entities.Count > 0)
+                    await unitOfWork.ExtractedEntities.AddRangeAsync(extraction.Entities);
+
+                if (extraction.Relationships.Count > 0)
+                    await unitOfWork.ExtractedRelationships.AddRangeAsync(extraction.Relationships);
+
+                await unitOfWork.SaveChangesAsync();
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                logger.LogWarning(ex, "Knowledge extraction failed for chunk {ChunkId}. Continuing.", chunks[i].Id);
+                continue;
+            }
+        }
+    }
+
+    private static bool ShouldExtractKnowledge(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        var normalized = content.Trim();
+        if (normalized.Length < 40)
+            return false;
+
+        if (MarkdownOnlyRegex.IsMatch(normalized))
+            return false;
+
+        if (DataUriImageRegex.IsMatch(normalized))
+            return false;
+
+        var alphaNumericCount = normalized.Count(char.IsLetterOrDigit);
+        return alphaNumericCount >= 20;
+    }
+
+    private static async Task UpdateDocumentStatusAsync(
+        IUnitOfWork unitOfWork,
+        Document document,
+        DocumentStatus status)
+    {
+        document.Status = status;
+        await unitOfWork.Documents.Update(document);
+        await unitOfWork.SaveChangesAsync();
+    }
+
+    private static async Task<Document> SaveDocumentRecordAsync(IFormFile file, Guid userId, IUnitOfWork unitOfWork)
     {
         await using var stream = file.OpenReadStream();
         var filePath = await SaveFileAsync(stream, file.FileName);
@@ -148,8 +269,8 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             Status = DocumentStatus.Pending
         };
 
-        await _unitOfWork.Documents.AddAsync(document);
-        await _unitOfWork.SaveChangesAsync();
+        await unitOfWork.Documents.AddAsync(document);
+        await unitOfWork.SaveChangesAsync();
 
         return document;
     }
@@ -167,4 +288,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         return filePath;
     }
+
+    private sealed record FilePayload(byte[] FileBytes, string FileName, string? ContentType);
 }

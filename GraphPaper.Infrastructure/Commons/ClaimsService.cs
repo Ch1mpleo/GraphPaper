@@ -7,7 +7,6 @@ namespace GraphPaper.Infrastructure.Commons;
 
 public class ClaimsService : IClaimsService
 {
-    private readonly IUnitOfWork _unitOfWork;
 
     public ClaimsService(IHttpContextAccessor httpContextAccessor)
     {

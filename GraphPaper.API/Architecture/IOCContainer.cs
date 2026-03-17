@@ -76,7 +76,6 @@ public static class IocContainer
         services.AddScoped<IClaimsService, ClaimsService>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-        services.AddSingleton<IDocumentParserService, DocumentParserService>();
         services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
         services.AddScoped<IDocumentReviewService, DocumentReviewService>();
         services.AddScoped<IAuthService, AuthService>();
@@ -208,8 +207,8 @@ public static class IocContainer
 
         services.AddSingleton<IKnowledgeExtractionService>(sp =>
         {
-            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GroqKnowledge");
-            return new GroqKnowledgeExtractionService(httpClient, groqApiKey);
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new GroqKnowledgeExtractionService(factory, groqApiKey);
         });
 
         return services;

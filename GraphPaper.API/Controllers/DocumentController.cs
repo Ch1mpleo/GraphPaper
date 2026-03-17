@@ -1,11 +1,9 @@
 using GraphPaper.Application.DTOs.DocumentDTO;
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Application.Utils;
-using GraphPaper.Infrastructure.Commons;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
-using System.Security.Claims;
 
 namespace GraphPaper.API.Controllers;
 
