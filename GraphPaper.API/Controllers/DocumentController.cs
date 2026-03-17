@@ -5,6 +5,7 @@ using GraphPaper.Infrastructure.Commons;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
+using System.Security.Claims;
 
 namespace GraphPaper.API.Controllers;
 
@@ -40,10 +41,9 @@ public class DocumentController : ControllerBase
         if (extension is not ".pdf" and not ".docx")
             return BadRequest(ApiResult.Failure("400", "Only .pdf and .docx files are supported."));
 
-        await using var stream = file.OpenReadStream();
-        var documentId = await _processingService.ProcessDocumentAsync(stream, file.FileName);
+        var document = await _processingService.IngestAsync(file);
 
-        return Ok(ApiResult<Guid>.Success(documentId, "200", "Document uploaded and processed successfully."));
+        return Ok(ApiResult<Guid>.Success(document.Id, "200", "Document uploaded and queued for processing."));
     }
 
     /// <summary>

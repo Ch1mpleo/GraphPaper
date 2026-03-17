@@ -2,100 +2,92 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 
-namespace GraphPaper.Application.Services
-{
-    public class GeminiEmbeddingService : IEmbeddingService
-    {
-        private readonly HttpClient _httpClient;
-        private readonly string _apiKey;
-        private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
-        private const string ModelId = "gemini-embedding-2-preview";
-        private const int MaxParallelRequests = 5;
-        private const int OutputDimensionality = 1536;
+namespace GraphPaper.Application.Services;
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
+public sealed class GeminiEmbeddingService : IEmbeddingService
+{
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly string _apiKey;
+    private const string ModelId = "gemini-embedding-2-preview";
+    private const int MaxParallelRequests = 5;
+    private const int OutputDimensionality = 768;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private const int MaxTextLength = 8000;
+
+    public GeminiEmbeddingService(IHttpClientFactory httpClientFactory, string apiKey)
+    {
+        _httpClientFactory = httpClientFactory;
+        _apiKey = apiKey;
+    }
+
+    public async Task<float[]> GetEmbeddingAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("Text cannot be empty for embedding.", nameof(text));
+
+        if (text.Length > MaxTextLength)
+            text = text[..MaxTextLength];
+
+        using var client = _httpClientFactory.CreateClient("Gemini");
+        var url = $"v1beta/models/{ModelId}:embedContent?key={_apiKey}";
+
+        var request = new
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            content = new
+            {
+                parts = new[]
+                {
+                    new { text }
+                }
+            },
+            outputDimensionality = OutputDimensionality
         };
 
-        public GeminiEmbeddingService(HttpClient httpClient, string apiKey)
+        var response = await client.PostAsJsonAsync(url, request);
+
+        if (!response.IsSuccessStatusCode)
         {
-            _httpClient = httpClient;
-            _apiKey = apiKey;
+            var errorBody = await response.Content.ReadAsStringAsync();
+            throw new HttpRequestException(
+                $"Gemini Embedding API returned {(int)response.StatusCode}: {errorBody}");
         }
 
-        private const int MaxTextLength = 8000;
+        var jsonResponse = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, JsonOptions);
 
-        public async Task<float[]> GetEmbeddingAsync(string text)
+        return result?.Embedding?.Values
+               ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
+    }
+
+    public async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
+    {
+        const int batchSize = 10;
+        var results = new List<float[]>(texts.Count);
+
+        foreach (var batch in texts.Chunk(batchSize))
         {
-            if (string.IsNullOrWhiteSpace(text))
-                throw new ArgumentException("Text cannot be empty for embedding.");
+            var tasks = batch.Select(GetEmbeddingAsync);
+            var batchResults = await Task.WhenAll(tasks);
+            results.AddRange(batchResults);
 
-            if (text.Length > MaxTextLength)
-                text = text[..MaxTextLength];
-
-            var url = $"{BaseUrl}{ModelId}:embedContent?key={_apiKey}";
-
-            var request = new
-            {
-                content = new
-                {
-                    parts = new[]
-                    {
-                        new { text }
-                    }
-                },
-                outputDimensionality = OutputDimensionality
-            };
-
-            var response = await _httpClient.PostAsJsonAsync(url, request);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorBody = await response.Content.ReadAsStringAsync();
-                throw new HttpRequestException(
-                    $"Gemini Embedding API returned {(int)response.StatusCode}: {errorBody}");
-            }
-
-            var jsonResponse = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<EmbeddingResponse>(jsonResponse, JsonOptions);
-
-            return result?.Embedding?.Values
-                   ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
+            await Task.Delay(100);
         }
 
-        public async Task<List<float[]>> GetBatchEmbeddingsAsync(List<string> texts)
-        {
-            var results = new float[texts.Count][];
+        return results;
+    }
 
-            // Process in parallel with a concurrency limit to avoid rate limiting
-            using var semaphore = new SemaphoreSlim(MaxParallelRequests);
-            var tasks = texts.Select(async (text, index) =>
-            {
-                await semaphore.WaitAsync();
-                try
-                {
-                    results[index] = await GetEmbeddingAsync(text);
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            });
+    private sealed class EmbeddingResponse
+    {
+        public EmbeddingData? Embedding { get; set; }
+    }
 
-            await Task.WhenAll(tasks);
-
-            return [.. results];
-        }
-
-        private class EmbeddingResponse
-        {
-            public EmbeddingData? Embedding { get; set; }
-        }
-
-        private class EmbeddingData
-        {
-            public float[]? Values { get; set; }
-        }
+    private sealed class EmbeddingData
+    {
+        public float[]? Values { get; set; }
     }
 }

@@ -183,16 +183,27 @@ public static class IocContainer
                          ?? throw new InvalidOperationException("Groq API Key is missing.");
 
         // Named HttpClients managed by IHttpClientFactory (avoids socket exhaustion)
-        services.AddHttpClient("GeminiEmbedding");
+        services.AddHttpClient("Gemini", client =>
+        {
+            client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
+            client.Timeout = TimeSpan.FromSeconds(30);
+        });
         services.AddHttpClient("GroqKnowledge", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(5);
         });
+        services.AddHttpClient("Docling", client =>
+        {
+            client.BaseAddress = new Uri("http://graphpaper.parser:5001");
+            client.Timeout = TimeSpan.FromMinutes(5);
+        });
+
+        services.AddScoped<IDoclingClient, DoclingClient>();
 
         services.AddSingleton<IEmbeddingService>(sp =>
         {
-            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("GeminiEmbedding");
-            return new GeminiEmbeddingService(httpClient, geminiApiKey);
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new GeminiEmbeddingService(factory, geminiApiKey);
         });
 
         services.AddSingleton<IKnowledgeExtractionService>(sp =>

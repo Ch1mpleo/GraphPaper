@@ -107,7 +107,10 @@ namespace GraphPaper.Domain.Migrations
                     ChunkIndex = table.Column<int>(type: "integer", nullable: false),
                     PageNumber = table.Column<int>(type: "integer", nullable: false),
                     Content = table.Column<string>(type: "text", nullable: false),
-                    Embedding = table.Column<Vector>(type: "vector(1536)", nullable: true),
+                    Embedding = table.Column<Vector>(type: "vector(768)", nullable: true),
+                    SectionTitle = table.Column<string>(type: "text", nullable: true),
+                    ChunkType = table.Column<string>(type: "text", nullable: false),
+                    HeadingLevel = table.Column<int>(type: "integer", nullable: true),
                     IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     CreatedBy = table.Column<Guid>(type: "uuid", nullable: false),
@@ -265,9 +268,17 @@ namespace GraphPaper.Domain.Migrations
                 column: "UserId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_DocumentChunks_DocumentId",
+                name: "ix_document_chunks_document_active",
                 table: "DocumentChunks",
-                column: "DocumentId");
+                column: "DocumentId",
+                filter: "\"IsDeleted\" = false");
+
+            migrationBuilder.Sql(@"
+                CREATE INDEX ix_document_chunks_embedding
+                ON ""DocumentChunks""
+                USING ivfflat (""Embedding"" vector_cosine_ops)
+                WITH (lists = 100);
+            ");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Documents_UserId",

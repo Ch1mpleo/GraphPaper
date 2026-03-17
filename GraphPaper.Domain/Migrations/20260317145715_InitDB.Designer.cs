@@ -13,7 +13,7 @@ using Pgvector;
 namespace GraphPaper.Domain.Migrations
 {
     [DbContext(typeof(GraphPaperDbContext))]
-    [Migration("20260312114524_InitDB")]
+    [Migration("20260317145715_InitDB")]
     partial class InitDB
     {
         /// <inheritdoc />
@@ -196,7 +196,7 @@ namespace GraphPaper.Domain.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<Vector>("Embedding")
-                        .HasColumnType("vector(1536)");
+                        .HasColumnType("vector(768)");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");

@@ -1,4 +1,5 @@
 ﻿using GraphPaper.API.Architecture;
+using Microsoft.AspNetCore.Diagnostics;
 using SwaggerThemes;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
@@ -57,6 +58,23 @@ builder.Services.AddSignalR(options =>
     options.EnableDetailedErrors = true;
 });
 var app = builder.Build();
+
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+        var statusCode = exception?.Data["StatusCode"] as int? ?? 500;
+
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = "application/json";
+
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = exception?.Message ?? "Internal server error"
+        });
+    });
+});
 
 
 // Check chắc chắn MinIO bucket đã tồn tại sau khi project build

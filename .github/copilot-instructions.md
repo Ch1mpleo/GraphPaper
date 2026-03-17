@@ -22,9 +22,13 @@ It is **EXTREMELY important that you follow the instructions in the rule files v
 Don't ask to run the tests, just do it. If you are not sure how to run the tests, ask for help. 
 You can also use `dotnet watch test` to run the tests automatically when you change the code.
 
-3. Don't create unnecessary md files after implementing a feature.
+3. Prefer strict Clean Architecture dependency flow: API -> Application -> Domain, and Infrastructure should only implement interfaces (no Application -> Infrastructure reference). 
 
-4. Fix any compiler warnings and errors before going to the next step.
+4. Do not use `IClaimsService` in the controller layer; avoid claim-service dependency at the controller stage.
+
+5. Don't create unnecessary md files after implementing a feature.
+
+6. Fix any compiler warnings and errors before going to the next step.
 
 ## GPU Usage
 

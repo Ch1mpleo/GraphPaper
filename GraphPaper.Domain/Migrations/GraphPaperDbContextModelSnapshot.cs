@@ -192,14 +192,24 @@ namespace GraphPaper.Domain.Migrations
                     b.Property<Guid>("DocumentId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ChunkType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<Vector>("Embedding")
-                        .HasColumnType("vector(1536)");
+                        .HasColumnType("vector(768)");
+
+                    b.Property<int?>("HeadingLevel")
+                        .HasColumnType("integer");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
                     b.Property<int>("PageNumber")
                         .HasColumnType("integer");
+
+                    b.Property<string>("SectionTitle")
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

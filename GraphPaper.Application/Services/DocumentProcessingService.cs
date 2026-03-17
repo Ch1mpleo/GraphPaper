@@ -1,13 +1,13 @@
 using GraphPaper.Application.Interfaces;
-using GraphPaper.Application.Utils;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Domain.Enums;
 using GraphPaper.Infrastructure.Interfaces;
+using Microsoft.AspNetCore.Http;
 using Pgvector;
 
 namespace GraphPaper.Application.Services;
 
-public class DocumentProcessingService : IDocumentProcessingService
+public sealed class DocumentProcessingService : IDocumentProcessingService
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly IDocumentParserService _parserService;
@@ -29,44 +29,46 @@ public class DocumentProcessingService : IDocumentProcessingService
         _claimsService = claimsService;
     }
 
-    public async Task<Guid> ProcessDocumentAsync(Stream fileStream, string fileName)
+    public async Task<Document> IngestAsync(IFormFile file)
     {
-        // 1. Buffer the stream so it can be read twice (save + parse)
-        using var memoryStream = new MemoryStream();
-        await fileStream.CopyToAsync(memoryStream);
+        if (file is null)
+            throw new ArgumentNullException(nameof(file));
 
-        // 2. Save file to disk
-        memoryStream.Position = 0;
-        var filePath = await SaveFileAsync(memoryStream, fileName);
-
-        // 3. Create Document record (Pending)
         var userId = _claimsService.GetCurrentUserId;
 
-        var document = new Document
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId,
-            Title = Path.GetFileNameWithoutExtension(fileName),
-            FilePath = filePath,
-            Status = DocumentStatus.Pending
-        };
-        await _unitOfWork.Documents.AddAsync(document);
-        await _unitOfWork.SaveChangesAsync();
+        if (userId == Guid.Empty)
+            throw new ArgumentException("User id is required.", nameof(userId));
+
+        var document = await SaveDocumentRecordAsync(file, userId);
+
+        await using var fileStream = file.OpenReadStream();
+        using var memoryStream = new MemoryStream();
+        await fileStream.CopyToAsync(memoryStream);
+        var fileBytes = memoryStream.ToArray();
+
+        _ = Task.Run(() => ProcessDocumentAsync(document.Id, file.FileName, fileBytes));
+
+        return document;
+    }
+
+    private async Task ProcessDocumentAsync(Guid documentId, string fileName, byte[] fileBytes)
+    {
+        var document = await _unitOfWork.Documents.GetByIdAsync(documentId);
+        if (document is null)
+            return;
 
         try
         {
-            // 4. Parse file → extract text by pages
             document.Status = DocumentStatus.Chunking;
             await _unitOfWork.Documents.Update(document);
             await _unitOfWork.SaveChangesAsync();
 
-            memoryStream.Position = 0;
-            var pages = _parserService.Parse(memoryStream, fileName);
+            using var parseStream = new MemoryStream(fileBytes);
+            var pages = _parserService.Parse(parseStream, fileName);
 
             if (pages.Count == 0)
-                throw ErrorHelper.BadRequest("Could not extract any text from the document.");
+                throw new InvalidOperationException("Could not extract any text from the document.");
 
-            // 5. Build chunk entities
             var chunks = new List<DocumentChunk>();
             int chunkIndex = 0;
 
@@ -82,7 +84,6 @@ public class DocumentProcessingService : IDocumentProcessingService
                 });
             }
 
-            // 6. Generate embeddings
             document.Status = DocumentStatus.Extracting;
             await _unitOfWork.Documents.Update(document);
             await _unitOfWork.SaveChangesAsync();
@@ -95,13 +96,9 @@ public class DocumentProcessingService : IDocumentProcessingService
                 chunks[i].Embedding = new Vector(embeddings[i]);
             }
 
-            // 7. Persist chunks
             await _unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await _unitOfWork.SaveChangesAsync();
 
-            // 8. Extract knowledge graph (entities + relationships) from each chunk
-            // Saves per-chunk so that one failure doesn't lose all previous extractions
-            // Delay between calls to respect free-tier per-minute rate limits
             for (int i = 0; i < chunks.Count; i++)
             {
                 try
@@ -121,25 +118,40 @@ public class DocumentProcessingService : IDocumentProcessingService
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    // Rate limit, timeout, or API error — stop extraction, keep what's already saved
                     break;
                 }
             }
 
-            // 9. Mark document as Ready
             document.Status = DocumentStatus.Ready;
             await _unitOfWork.Documents.Update(document);
             await _unitOfWork.SaveChangesAsync();
-
-            return document.Id;
         }
         catch
         {
             document.Status = DocumentStatus.Failed;
             await _unitOfWork.Documents.Update(document);
             await _unitOfWork.SaveChangesAsync();
-            throw;
         }
+    }
+
+    private async Task<Document> SaveDocumentRecordAsync(IFormFile file, Guid userId)
+    {
+        await using var stream = file.OpenReadStream();
+        var filePath = await SaveFileAsync(stream, file.FileName);
+
+        var document = new Document
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            Title = Path.GetFileNameWithoutExtension(file.FileName),
+            FilePath = filePath,
+            Status = DocumentStatus.Pending
+        };
+
+        await _unitOfWork.Documents.AddAsync(document);
+        await _unitOfWork.SaveChangesAsync();
+
+        return document;
     }
 
     private static async Task<string> SaveFileAsync(Stream stream, string fileName)
