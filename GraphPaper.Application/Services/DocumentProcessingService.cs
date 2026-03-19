@@ -421,6 +421,14 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         for (var i = 1; i < chunks.Count; i++)
         {
+            var current = chunks[i].Content;
+
+            // Skip overlap when the chunk starts with a markdown heading (##/###).
+            // A heading marks a natural section boundary — prepending context from
+            // the previous section creates incoherent fragments, not useful context.
+            if (current.TrimStart().StartsWith('#'))
+                continue;
+
             var prev = chunks[i - 1].Content;
             if (prev.Length == 0) continue;
 
