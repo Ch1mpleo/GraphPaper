@@ -40,11 +40,13 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         // Collapse 3+ consecutive newlines down to 2 (one blank line).
         cleaned = Regex.Replace(cleaned, @"\n{3,}", "\n\n");
 
-        // Rejoin page-break mid-sentence: if a double-newline is followed by a
-        // lowercase letter (Latin or Vietnamese), the break was artificial — merge.
+        // Rejoin page-break mid-sentence.
+        // [^.\n!?] ensures we only join when the previous line does NOT end with a
+        // sentence-terminator — that way true boundaries (new heading, new bullet) are kept.
+        // Characters range \u00c0-\u01ff covers both upper- and lowercase Latin/Vietnamese.
         cleaned = Regex.Replace(
             cleaned,
-            @"([^\n])\n\n([a-z\u00e0-\u01ff])",
+            @"([^.\n!?])\n\n([A-Za-z\u00c0-\u01ff])",
             "$1 $2");
 
         return cleaned.Trim();
@@ -375,23 +377,35 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         foreach (var chunk in chunks)
         {
-            // A chunk that begins with a heading is usually a natural boundary.
-            // However, if it is extremely tiny (< MinChunkCharacters/2, e.g. a bare
-            // section title with no body), still absorb it so it doesn't become an
-            // isolated heading-only chunk that embeds poorly.
-            var isTinyHeading = chunk.Content.TrimStart().StartsWith('#')
-                                && chunk.Content.Length < options.MinChunkCharacters / 2;
+            var isHeading    = chunk.Content.TrimStart().StartsWith('#');
+            var isTinyHeading = isHeading && chunk.Content.Length < options.MinChunkCharacters / 2;
 
             if (buffer.Length == 0)
             {
-                // Start a fresh buffer with this chunk.
                 buffer.Append(chunk.Content);
                 bufferPage = chunk.PageNumber;
             }
-            else if (!chunk.Content.TrimStart().StartsWith('#') || isTinyHeading)
+            else if (isTinyHeading)
             {
-                // Normal (non-heading) chunk, or tiny heading: merge if buffer is small
-                // and the combined result stays within max.
+                // Tiny heading: always absorb into current buffer if room exists.
+                // Never flush here — a bare heading chunk is too small to stand alone.
+                if (buffer.Length + chunk.Content.Length + 2 <= options.MaxChunkCharacters)
+                {
+                    buffer.Append("\n\n");
+                    buffer.Append(chunk.Content);
+                }
+                else
+                {
+                    // Buffer already at max capacity — flush and start with tiny heading;
+                    // the next normal chunk will be merged into it.
+                    FlushBuffer();
+                    buffer.Append(chunk.Content);
+                    bufferPage = chunk.PageNumber;
+                }
+            }
+            else if (!isHeading)
+            {
+                // Normal (non-heading) chunk: merge while buffer is still small.
                 if (buffer.Length < options.MinChunkCharacters &&
                     buffer.Length + chunk.Content.Length + 2 <= options.MaxChunkCharacters)
                 {
@@ -407,7 +421,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             }
             else
             {
-                // Full-size heading chunk — always starts a new buffer.
+                // Full-size heading: always flush and start a new buffer.
                 FlushBuffer();
                 buffer.Append(chunk.Content);
                 bufferPage = chunk.PageNumber;
@@ -559,6 +573,14 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         var normalized = content.Trim();
         if (normalized.Length < 40)
+            return false;
+
+        // Skip chunks where every non-empty line is a markdown heading.
+        // Heading-only chunks carry no extractable knowledge — only noise entities
+        // like "CHIÊM HỮU GIÁ TRỊ" extracted from a bare section title.
+        var lines = normalized.Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.All(l => l.StartsWith('#')))
             return false;
 
         if (MarkdownOnlyRegex.IsMatch(normalized))
