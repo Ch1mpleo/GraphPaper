@@ -14,8 +14,31 @@ namespace GraphPaper.Application.Services;
 
 public sealed class DocumentProcessingService : IDocumentProcessingService
 {
+    // Detects the START of a data-URI image (used for ShouldExtractKnowledge guard).
     private static readonly Regex DataUriImageRegex = new(@"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Matches a COMPLETE inline markdown image whose src is a base64 data URI.
+    // Uses Singleline so '.' crosses newlines (some base64 strings wrap lines).
+    private static readonly Regex DataUriImageBlockRegex = new(
+        @"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/\r\n=]+\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
+
+    // Strips base64 image blocks and collapses excess whitespace.
+    private static string CleanContent(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        // Remove the entire ![](...base64...) markdown image block.
+        var cleaned = DataUriImageBlockRegex.Replace(text, string.Empty);
+
+        // Collapse 3+ consecutive newlines down to 2 (one blank line).
+        cleaned = Regex.Replace(cleaned, @"\n{3,}", "\n\n");
+
+        return cleaned.Trim();
+    }
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IClaimsService _claimsService;
@@ -179,7 +202,8 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         foreach (var textItem in textItems)
         {
-            var content = textItem.Text.Trim();
+            // Strip inline base64 images before checking content.
+            var content = CleanContent(textItem.Text);
             if (string.IsNullOrWhiteSpace(content))
                 continue;
 
@@ -210,7 +234,14 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (string.IsNullOrWhiteSpace(markdownContent))
             return [];
 
-        var paragraphs = markdownContent
+        // Strip all base64 data URI images before splitting into paragraphs.
+        // Without this, huge base64 strings are cut mid-character by SplitParagraph,
+        // leaving truncated garbage as the primary content of many chunks.
+        var cleaned = CleanContent(markdownContent);
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return [];
+
+        var paragraphs = cleaned
             .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(p => !string.IsNullOrWhiteSpace(p));
 
