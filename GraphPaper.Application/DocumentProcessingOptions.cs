@@ -20,7 +20,7 @@ public sealed class DocumentProcessingOptions
     /// <summary>Number of characters from the end of the previous chunk
     /// to prepend to the current chunk, preserving context at boundaries.
     /// Set to 0 to disable overlap.</summary>
-    public int ChunkOverlapCharacters { get; init; } = 150;
+    public int ChunkOverlapCharacters { get; init; } = 80;
 
     // ── Gemini Embedding ──────────────────────────────────────────────────
     /// <summary>Number of chunks per embedding batch request.</summary>

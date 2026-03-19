@@ -25,14 +25,17 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
 
-    // Strips base64 image blocks and collapses excess whitespace.
+    // Strips base64 image blocks, decodes HTML entities, and collapses excess whitespace.
     private static string CleanContent(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return string.Empty;
 
+        // Decode HTML entities produced by Docling (e.g. &amp; → &, &lt; → <).
+        var decoded = System.Net.WebUtility.HtmlDecode(text);
+
         // Remove the entire ![](...base64...) markdown image block.
-        var cleaned = DataUriImageBlockRegex.Replace(text, string.Empty);
+        var cleaned = DataUriImageBlockRegex.Replace(decoded, string.Empty);
 
         // Collapse 3+ consecutive newlines down to 2 (one blank line).
         cleaned = Regex.Replace(cleaned, @"\n{3,}", "\n\n");
@@ -221,11 +224,15 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
     }
 
     /// <summary>
-    /// FIX 3: Splits markdown into paragraph-level chunks, then further sub-splits any paragraph
-    /// that exceeds <see cref="DocumentProcessingOptions.MaxChunkCharacters"/> at sentence
-    /// boundaries. Previously, a document without blank lines would produce one enormous chunk
-    /// that silently exceeded Groq's input limit and wasted embedding tokens.
+    /// Splits markdown into heading-scoped sections first (## / ###), then sub-splits
+    /// sections that are still too large by paragraph (\n\n), and finally by sentence
+    /// boundary if a paragraph still exceeds MaxChunkCharacters.
+    /// This produces semantically coherent chunks that keep the heading context intact,
+    /// unlike a naive \n\n split which loses section membership.
     /// </summary>
+    private static readonly Regex HeadingSplitRegex =
+        new(@"(?=^#{1,3} )", RegexOptions.Compiled | RegexOptions.Multiline);
+
     private static List<DocumentChunk> BuildChunksFromMarkdown(
         string? markdownContent,
         Guid documentId,
@@ -234,32 +241,57 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (string.IsNullOrWhiteSpace(markdownContent))
             return [];
 
-        // Strip all base64 data URI images before splitting into paragraphs.
-        // Without this, huge base64 strings are cut mid-character by SplitParagraph,
-        // leaving truncated garbage as the primary content of many chunks.
+        // Clean: strip base64 images, decode HTML entities, collapse blank lines.
         var cleaned = CleanContent(markdownContent);
         if (string.IsNullOrWhiteSpace(cleaned))
             return [];
 
-        var paragraphs = cleaned
-            .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(p => !string.IsNullOrWhiteSpace(p));
+        // ── Step 1: split by heading (##/###) to get semantically scoped sections ──
+        // Each section string still starts with its heading text.
+        var sections = HeadingSplitRegex
+            .Split(cleaned)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim());
 
         var chunks = new List<DocumentChunk>();
         var chunkIndex = 0;
 
-        foreach (var para in paragraphs)
+        foreach (var section in sections)
         {
-            foreach (var subChunk in SplitParagraph(para, options.MaxChunkCharacters))
+            if (section.Length <= options.MaxChunkCharacters)
             {
+                // ── Small section: store as one chunk ──────────────────────────────
                 chunks.Add(new DocumentChunk
                 {
-                    Id = Guid.NewGuid(),
+                    Id         = Guid.NewGuid(),
                     DocumentId = documentId,
                     ChunkIndex = chunkIndex++,
                     PageNumber = 0,
-                    Content = subChunk
+                    Content    = section
                 });
+            }
+            else
+            {
+                // ── Large section: sub-split by paragraph then by sentence ─────────
+                var paragraphs = section
+                    .Split(["\r\n\r\n", "\n\n"],
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(p => !string.IsNullOrWhiteSpace(p));
+
+                foreach (var para in paragraphs)
+                {
+                    foreach (var subChunk in SplitParagraph(para, options.MaxChunkCharacters))
+                    {
+                        chunks.Add(new DocumentChunk
+                        {
+                            Id         = Guid.NewGuid(),
+                            DocumentId = documentId,
+                            ChunkIndex = chunkIndex++,
+                            PageNumber = 0,
+                            Content    = subChunk
+                        });
+                    }
+                }
             }
         }
 
