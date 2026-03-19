@@ -40,6 +40,13 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         // Collapse 3+ consecutive newlines down to 2 (one blank line).
         cleaned = Regex.Replace(cleaned, @"\n{3,}", "\n\n");
 
+        // Rejoin page-break mid-sentence: if a double-newline is followed by a
+        // lowercase letter (Latin or Vietnamese), the break was artificial — merge.
+        cleaned = Regex.Replace(
+            cleaned,
+            @"([^\n])\n\n([a-z\u00e0-\u01ff])",
+            "$1 $2");
+
         return cleaned.Trim();
     }
 
@@ -368,22 +375,39 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         foreach (var chunk in chunks)
         {
+            // A chunk that begins with a heading is usually a natural boundary.
+            // However, if it is extremely tiny (< MinChunkCharacters/2, e.g. a bare
+            // section title with no body), still absorb it so it doesn't become an
+            // isolated heading-only chunk that embeds poorly.
+            var isTinyHeading = chunk.Content.TrimStart().StartsWith('#')
+                                && chunk.Content.Length < options.MinChunkCharacters / 2;
+
             if (buffer.Length == 0)
             {
                 // Start a fresh buffer with this chunk.
                 buffer.Append(chunk.Content);
                 bufferPage = chunk.PageNumber;
             }
-            else if (buffer.Length < options.MinChunkCharacters &&
-                     buffer.Length + chunk.Content.Length + 2 <= options.MaxChunkCharacters)
+            else if (!chunk.Content.TrimStart().StartsWith('#') || isTinyHeading)
             {
-                // Current buffer is still small AND merged result stays within max — absorb.
-                buffer.Append("\n\n");
-                buffer.Append(chunk.Content);
+                // Normal (non-heading) chunk, or tiny heading: merge if buffer is small
+                // and the combined result stays within max.
+                if (buffer.Length < options.MinChunkCharacters &&
+                    buffer.Length + chunk.Content.Length + 2 <= options.MaxChunkCharacters)
+                {
+                    buffer.Append("\n\n");
+                    buffer.Append(chunk.Content);
+                }
+                else
+                {
+                    FlushBuffer();
+                    buffer.Append(chunk.Content);
+                    bufferPage = chunk.PageNumber;
+                }
             }
             else
             {
-                // Flush what we have, start fresh with this chunk.
+                // Full-size heading chunk — always starts a new buffer.
                 FlushBuffer();
                 buffer.Append(chunk.Content);
                 bufferPage = chunk.PageNumber;
