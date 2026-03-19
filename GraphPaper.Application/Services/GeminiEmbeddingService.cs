@@ -1,4 +1,5 @@
-﻿using GraphPaper.Application.Interfaces;
+using GraphPaper.Application;
+using GraphPaper.Application.Interfaces;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -6,25 +7,22 @@ namespace GraphPaper.Application.Services;
 
 public sealed class GeminiEmbeddingService : IEmbeddingService
 {
-    private const int BatchSize = 10;
-
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _apiKey;
+    private readonly DocumentProcessingOptions _options;
+
     private const string ModelId = "gemini-embedding-2-preview";
-    private const int MaxParallelRequests = 5;
-    private const int OutputDimensionality = 768;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    private const int MaxTextLength = 8000;
-
-    public GeminiEmbeddingService(IHttpClientFactory httpClientFactory, string apiKey)
+    public GeminiEmbeddingService(IHttpClientFactory httpClientFactory, string apiKey, DocumentProcessingOptions options)
     {
         _httpClientFactory = httpClientFactory;
         _apiKey = apiKey;
+        _options = options;
     }
 
     public async Task<float[]> GetEmbeddingAsync(string text)
@@ -32,11 +30,11 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Text cannot be empty for embedding.", nameof(text));
 
-        var normalizedText = NormalizeText(text);
+        var normalizedText = NormalizeText(text, _options.EmbeddingMaxTextLength);
 
         using var client = _httpClientFactory.CreateClient("Gemini");
         var url = $"v1beta/models/{ModelId}:embedContent?key={_apiKey}";
-        var request = BuildEmbeddingRequest(normalizedText);
+        var request = BuildEmbeddingRequest(normalizedText, _options.EmbeddingOutputDimensionality);
 
         using var response = await client.PostAsJsonAsync(url, request);
 
@@ -56,9 +54,9 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
 
         var results = new float[texts.Count][];
 
-        foreach (var batch in texts.Select((text, index) => (text, index)).Chunk(BatchSize))
+        foreach (var batch in texts.Select((text, index) => (text, index)).Chunk(_options.EmbeddingBatchSize))
         {
-            using var throttler = new SemaphoreSlim(MaxParallelRequests, MaxParallelRequests);
+            using var throttler = new SemaphoreSlim(_options.EmbeddingMaxParallel, _options.EmbeddingMaxParallel);
 
             var tasks = batch.Select(async item =>
             {
@@ -81,7 +79,7 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
         return [.. results];
     }
 
-    private static object BuildEmbeddingRequest(string text)
+    private static object BuildEmbeddingRequest(string text, int outputDimensionality)
     {
         return new
         {
@@ -92,7 +90,7 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
                     new { text }
                 }
             },
-            outputDimensionality = OutputDimensionality
+            outputDimensionality
         };
     }
 
@@ -105,10 +103,10 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
                ?? throw new InvalidOperationException("Failed to get embedding from Gemini API");
     }
 
-    private static string NormalizeText(string text)
+    private static string NormalizeText(string text, int maxLength)
     {
-        if (text.Length > MaxTextLength)
-            return text[..MaxTextLength];
+        if (text.Length > maxLength)
+            return text[..maxLength];
 
         return text;
     }

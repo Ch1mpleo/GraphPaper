@@ -1,3 +1,4 @@
+using GraphPaper.Application;
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
 using System.Net.Http.Headers;
@@ -11,11 +12,10 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _apiKey;
+    private readonly DocumentProcessingOptions _options;
+
     private const string BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
     private const string MODEL_ID = "llama-3.3-70b-versatile";
-    private const int MAX_RETRIES = 3;
-    private const int MAX_CHUNK_LENGTH = 6000;
-    private const float MIN_RELATIONSHIP_CONFIDENCE = 0.35f;
     private const string SYSTEM_PROMPT = "You are a knowledge graph extraction assistant. Always respond with valid JSON only.";
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
@@ -25,10 +25,11 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         PropertyNameCaseInsensitive = true
     };
 
-    public GroqKnowledgeExtractionService(IHttpClientFactory httpClientFactory, string apiKey)
+    public GroqKnowledgeExtractionService(IHttpClientFactory httpClientFactory, string apiKey, DocumentProcessingOptions options)
     {
         _httpClientFactory = httpClientFactory;
         _apiKey = apiKey;
+        _options = options;
     }
 
     public async Task<KnowledgeExtractionResult> ExtractFromChunkAsync(DocumentChunk chunk)
@@ -36,9 +37,9 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         ArgumentNullException.ThrowIfNull(chunk);
 
         using var client = _httpClientFactory.CreateClient("GroqKnowledge");
-        var request = BuildRequest(chunk.Content);
+        var request = BuildRequest(chunk.Content, _options.KnowledgeMaxChunkLength);
 
-        for (var attempt = 0; attempt <= MAX_RETRIES; attempt++)
+        for (var attempt = 0; attempt <= _options.KnowledgeMaxRetries; attempt++)
         {
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BASE_URL);
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
@@ -49,7 +50,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             if (response.IsSuccessStatusCode)
                 return await ParseSuccessResponseAsync(response, chunk.Id);
 
-            if ((int)response.StatusCode == 429 && attempt < MAX_RETRIES)
+            if ((int)response.StatusCode == 429 && attempt < _options.KnowledgeMaxRetries)
             {
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
                 await Task.Delay(delay);
@@ -64,9 +65,9 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         return new KnowledgeExtractionResult();
     }
 
-    private static object BuildRequest(string chunkContent)
+    private static object BuildRequest(string chunkContent, int maxChunkLength)
     {
-        var prompt = BuildExtractionPrompt(chunkContent);
+        var prompt = BuildExtractionPrompt(chunkContent, maxChunkLength);
 
         return new
         {
@@ -81,7 +82,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         };
     }
 
-    private static async Task<KnowledgeExtractionResult> ParseSuccessResponseAsync(HttpResponseMessage response, Guid chunkId)
+    private async Task<KnowledgeExtractionResult> ParseSuccessResponseAsync(HttpResponseMessage response, Guid chunkId)
     {
         var jsonResponse = await response.Content.ReadAsStringAsync();
         var groqResult = JsonSerializer.Deserialize<GroqResponse>(jsonResponse, JsonOptions);
@@ -96,9 +97,9 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         return MapToEntities(extraction, chunkId);
     }
 
-    private static string BuildExtractionPrompt(string chunkContent)
+    private static string BuildExtractionPrompt(string chunkContent, int maxChunkLength)
     {
-        var normalizedChunkContent = NormalizeChunkContent(chunkContent);
+        var normalizedChunkContent = NormalizeChunkContent(chunkContent, maxChunkLength);
 
         return $$"""
             Analyze the following text and extract knowledge graph data.
@@ -130,10 +131,9 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             """;
     }
 
-    private static KnowledgeExtractionResult MapToEntities(ExtractionSchema schema, Guid chunkId)
+    private KnowledgeExtractionResult MapToEntities(ExtractionSchema schema, Guid chunkId)
     {
         var result = new KnowledgeExtractionResult();
-
         var entityLookup = new Dictionary<string, ExtractedEntity>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var e in schema.Entities ?? [])
@@ -164,7 +164,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             if (!entityLookup.TryGetValue(target, out var targetEntity)) continue;
 
             var confidence = Math.Clamp(r.ConfidenceScore, 0f, 1f);
-            if (confidence < MIN_RELATIONSHIP_CONFIDENCE) continue;
+            if (confidence < _options.KnowledgeMinConfidence) continue;
 
             result.Relationships.Add(new ExtractedRelationship
             {
@@ -195,14 +195,14 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         return extraction is not null;
     }
 
-    private static string NormalizeChunkContent(string chunkContent)
+    private static string NormalizeChunkContent(string chunkContent, int maxLength)
     {
         if (string.IsNullOrWhiteSpace(chunkContent))
             return string.Empty;
 
         var normalized = chunkContent.Trim();
-        if (normalized.Length > MAX_CHUNK_LENGTH)
-            normalized = normalized[..MAX_CHUNK_LENGTH];
+        if (normalized.Length > maxLength)
+            normalized = normalized[..maxLength];
 
         return normalized;
     }
@@ -212,10 +212,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        var normalized = NormalizeWhitespace(value)
-            .Trim('#', '*', '-', '`', ' ');
-
-        return normalized;
+        return NormalizeWhitespace(value).Trim('#', '*', '-', '`', ' ');
     }
 
     private static string NormalizeWhitespace(string? value)

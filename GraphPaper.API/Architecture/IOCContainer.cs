@@ -1,4 +1,5 @@
-﻿using GraphPaper.Application.Interfaces;
+using GraphPaper.Application;
+using GraphPaper.Application.Interfaces;
 using GraphPaper.Application.Services;
 using GraphPaper.Domain;
 using GraphPaper.Domain.Entities;
@@ -8,6 +9,7 @@ using GraphPaper.Infrastructure.Interfaces;
 using GraphPaper.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
@@ -24,22 +26,11 @@ public static class IocContainer
             .AddEnvironmentVariables()
             .Build();
 
-        //Add Logger
-        //services.AddScoped<ILoggerService, LoggerService>();
-
-        //Add Project Services
         services.SetupDbContext();
         services.SetupSwagger();
-
-        //Add generic repositories
         services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
-
-        //Add business services
         services.SetupBusinessServicesLayer();
-
-        //Add Service
         services.SetupAiServices(configuration);
-
         services.SetupJwt();
 
         return services;
@@ -53,17 +44,14 @@ public static class IocContainer
             .AddEnvironmentVariables()
             .Build();
 
-        // Lấy connection string từ "DefaultConnection"
         var connectionString = configuration.GetConnectionString("DefaultConnection");
 
-        // Đăng ký DbContext với Npgsql - Postgres
         services.AddDbContext<GraphPaperDbContext>(options =>
             options.UseNpgsql(connectionString, sql =>
             {
                 sql.MigrationsAssembly(typeof(GraphPaperDbContext).Assembly.FullName);
-                sql.UseVector();    // Enable vector extension for pgvector
-            }
-            )
+                sql.UseVector();
+            })
         );
 
         return services;
@@ -71,7 +59,6 @@ public static class IocContainer
 
     public static IServiceCollection SetupBusinessServicesLayer(this IServiceCollection services)
     {
-        // Inject service vào DI container
         services.AddScoped<ICurrentTime, CurrentTime>();
         services.AddScoped<IClaimsService, ClaimsService>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
@@ -97,6 +84,7 @@ public static class IocContainer
                 Version = "v1",
                 Description = "API for NotebookLM-like chatbot extract data from PDF into GraphRAG",
             });
+
             var jwtSecurityScheme = new OpenApiSecurityScheme
             {
                 Name = "JWT Authentication",
@@ -109,7 +97,7 @@ public static class IocContainer
 
             c.AddSecurityDefinition("Bearer", jwtSecurityScheme);
 
-            var securityRequirement = new OpenApiSecurityRequirement
+            c.AddSecurityRequirement(new OpenApiSecurityRequirement
             {
                 {
                     new OpenApiSecurityScheme
@@ -120,15 +108,11 @@ public static class IocContainer
                             Id = "Bearer"
                         }
                     },
-                    new string[] { }
+                    Array.Empty<string>()
                 }
-            };
+            });
 
-            c.AddSecurityRequirement(securityRequirement);
-
-            // Cấu hình Swagger để sử dụng Newtonsoft.Json
             c.UseAllOfForInheritance();
-
             c.EnableAnnotations();
         });
 
@@ -155,16 +139,17 @@ public static class IocContainer
                 x.SaveToken = true;
                 x.TokenValidationParameters = new TokenValidationParameters
                 {
-                    ValidateIssuer = true,   // Bật kiểm tra Issuer
-                    ValidateAudience = true, // Bật kiểm tra Audience
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
                     ValidateLifetime = true,
                     ValidIssuer = configuration["JWT:Issuer"],
                     ValidAudience = configuration["JWT:Audience"],
                     IssuerSigningKey =
-                        new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:SecretKey"] ??
-                                                                        throw new InvalidOperationException()))
+                        new SymmetricSecurityKey(Encoding.UTF8.GetBytes(
+                            configuration["JWT:SecretKey"] ?? throw new InvalidOperationException()))
                 };
             });
+
         services.AddAuthorization(options =>
         {
             options.AddPolicy("CustomerPolicy", policy =>
@@ -180,6 +165,10 @@ public static class IocContainer
                            ?? throw new InvalidOperationException("Gemini API Key is missing.");
         var groqApiKey = configuration["GROQ_API_KEY"]
                          ?? throw new InvalidOperationException("Groq API Key is missing.");
+
+        // Bind DocumentProcessingOptions from appsettings.json section
+        services.Configure<DocumentProcessingOptions>(
+            configuration.GetSection(DocumentProcessingOptions.Section));
 
         // Named HttpClients managed by IHttpClientFactory (avoids socket exhaustion)
         services.AddHttpClient("Gemini", client =>
@@ -202,13 +191,15 @@ public static class IocContainer
         services.AddSingleton<IEmbeddingService>(sp =>
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
-            return new GeminiEmbeddingService(factory, geminiApiKey);
+            var options = sp.GetRequiredService<IOptions<DocumentProcessingOptions>>().Value;
+            return new GeminiEmbeddingService(factory, geminiApiKey, options);
         });
 
         services.AddSingleton<IKnowledgeExtractionService>(sp =>
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
-            return new GroqKnowledgeExtractionService(factory, groqApiKey);
+            var options = sp.GetRequiredService<IOptions<DocumentProcessingOptions>>().Value;
+            return new GroqKnowledgeExtractionService(factory, groqApiKey, options);
         });
 
         return services;

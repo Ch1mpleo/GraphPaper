@@ -6,6 +6,7 @@ using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Pgvector;
 using System.Text.RegularExpressions;
 
@@ -13,22 +14,24 @@ namespace GraphPaper.Application.Services;
 
 public sealed class DocumentProcessingService : IDocumentProcessingService
 {
-    private static readonly TimeSpan ExtractionDelay = TimeSpan.FromSeconds(4);
     private static readonly Regex DataUriImageRegex = new(@"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IClaimsService _claimsService;
     private readonly ILogger<DocumentProcessingService> _logger;
+    private readonly DocumentProcessingOptions _options;
 
     public DocumentProcessingService(
         IServiceScopeFactory scopeFactory,
         IClaimsService claimsService,
-        ILogger<DocumentProcessingService> logger)
+        ILogger<DocumentProcessingService> logger,
+        IOptions<DocumentProcessingOptions> options)
     {
         _scopeFactory = scopeFactory;
         _claimsService = claimsService;
         _logger = logger;
+        _options = options.Value;
     }
 
     public async Task<Document> IngestAsync(IFormFile file)
@@ -41,16 +44,22 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (userId == Guid.Empty)
             throw new ArgumentException("User id is required.", nameof(userId));
 
+        // FIX 1: Read the file to a byte[] exactly once.
+        // Previously: file stream was opened once in SaveDocumentRecordAsync (to write to disk)
+        // and then read a second time via CopyToAsync(memoryStream) here — two full reads.
+        using var ms = new MemoryStream((int)file.Length);
+        await file.CopyToAsync(ms);
+        var fileBytes = ms.ToArray();
+
         Document document;
         using (var scope = _scopeFactory.CreateScope())
         {
             var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-            document = await SaveDocumentRecordAsync(file, userId, unitOfWork);
+            document = await SaveDocumentRecordAsync(fileBytes, file.FileName, userId, unitOfWork);
         }
 
-        using var memoryStream = new MemoryStream();
-        await file.CopyToAsync(memoryStream);
-        var filePayload = new FilePayload(memoryStream.ToArray(), file.FileName, file.ContentType);
+        // Pass the already-buffered bytes to the background task — no second read.
+        var filePayload = new FilePayload(fileBytes, file.FileName, file.ContentType);
 
         _ = Task.Run(async () =>
         {
@@ -67,6 +76,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 doclingClient,
                 embeddingService,
                 knowledgeExtractionService,
+                _options,
                 _logger);
         });
 
@@ -80,21 +90,29 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         IDoclingClient doclingClient,
         IEmbeddingService embeddingService,
         IKnowledgeExtractionService knowledgeExtractionService,
+        DocumentProcessingOptions options,
         ILogger logger)
     {
         var document = await unitOfWork.Documents.GetByIdAsync(documentId);
         if (document is null)
             return;
 
+        // FIX 2: Track the file path so we can clean it up on failure.
+        var filePath = document.FilePath;
+
         try
         {
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Chunking);
 
             var doclingResult = await doclingClient.ParseAsync(filePayload.FileBytes, filePayload.FileName, filePayload.ContentType);
-            var chunks = BuildChunksFromDocling(doclingResult.Document, document.Id, logger);
+            var chunks = BuildChunksFromDocling(doclingResult.Document, document.Id, options, logger);
 
             if (chunks.Count == 0)
                 throw new InvalidOperationException("Could not extract any text from the document.");
+
+            // Post-processing: merge tiny chunks, then add overlap between neighbours.
+            chunks = MergeSmallChunks(chunks, options);
+            ApplyChunkOverlap(chunks, options);
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Extracting);
 
@@ -106,7 +124,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await unitOfWork.SaveChangesAsync();
 
-            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
+            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, options, logger);
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);
         }
@@ -114,10 +132,28 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         {
             logger.LogError(ex, "Failed to process document {DocumentId}", documentId);
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Failed);
+
+            // FIX 2: Delete the orphaned file from disk when processing fails.
+            if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+            {
+                try
+                {
+                    File.Delete(filePath);
+                    logger.LogInformation("Deleted orphaned file {FilePath} for failed document {DocumentId}", filePath, documentId);
+                }
+                catch (Exception deleteEx)
+                {
+                    logger.LogWarning(deleteEx, "Could not delete orphaned file {FilePath}", filePath);
+                }
+            }
         }
     }
 
-    private static List<DocumentChunk> BuildChunksFromDocling(DoclingDocument? document, Guid documentId, ILogger logger)
+    private static List<DocumentChunk> BuildChunksFromDocling(
+        DoclingDocument? document,
+        Guid documentId,
+        DocumentProcessingOptions options,
+        ILogger logger)
     {
         if (document is null)
             return [];
@@ -126,7 +162,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (chunksFromTextItems.Count > 0)
             return chunksFromTextItems;
 
-        var chunksFromMarkdown = BuildChunksFromMarkdown(document.MarkdownContent, documentId);
+        var chunksFromMarkdown = BuildChunksFromMarkdown(document.MarkdownContent, documentId, options);
         if (chunksFromMarkdown.Count > 0)
             logger.LogInformation("Using Docling markdown fallback for document {DocumentId}", documentId);
 
@@ -160,30 +196,187 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         return chunks;
     }
 
-    private static List<DocumentChunk> BuildChunksFromMarkdown(string? markdownContent, Guid documentId)
+    /// <summary>
+    /// FIX 3: Splits markdown into paragraph-level chunks, then further sub-splits any paragraph
+    /// that exceeds <see cref="DocumentProcessingOptions.MaxChunkCharacters"/> at sentence
+    /// boundaries. Previously, a document without blank lines would produce one enormous chunk
+    /// that silently exceeded Groq's input limit and wasted embedding tokens.
+    /// </summary>
+    private static List<DocumentChunk> BuildChunksFromMarkdown(
+        string? markdownContent,
+        Guid documentId,
+        DocumentProcessingOptions options)
     {
         if (string.IsNullOrWhiteSpace(markdownContent))
             return [];
 
-        var parts = markdownContent
+        var paragraphs = markdownContent
             .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .ToList();
+            .Where(p => !string.IsNullOrWhiteSpace(p));
 
-        var chunks = new List<DocumentChunk>(parts.Count);
-        for (var i = 0; i < parts.Count; i++)
+        var chunks = new List<DocumentChunk>();
+        var chunkIndex = 0;
+
+        foreach (var para in paragraphs)
         {
-            chunks.Add(new DocumentChunk
+            foreach (var subChunk in SplitParagraph(para, options.MaxChunkCharacters))
             {
-                Id = Guid.NewGuid(),
-                DocumentId = documentId,
-                ChunkIndex = i,
-                PageNumber = 0,
-                Content = parts[i]
-            });
+                chunks.Add(new DocumentChunk
+                {
+                    Id = Guid.NewGuid(),
+                    DocumentId = documentId,
+                    ChunkIndex = chunkIndex++,
+                    PageNumber = 0,
+                    Content = subChunk
+                });
+            }
         }
 
         return chunks;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="text"/> into sub-strings no longer than <paramref name="maxLength"/>,
+    /// preferring to break at sentence endings (. ! ?) or newlines.
+    /// </summary>
+    private static IEnumerable<string> SplitParagraph(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            yield return text;
+            yield break;
+        }
+
+        var start = 0;
+        while (start < text.Length)
+        {
+            var remaining = text.Length - start;
+            if (remaining <= maxLength)
+            {
+                yield return text[start..].Trim();
+                yield break;
+            }
+
+            // Search for a sentence boundary within [start, start+maxLength).
+            // Count must be exactly the window size so we never look before `start`.
+            var windowEnd  = start + maxLength;
+            var windowSize = windowEnd - start;           // == maxLength, but explicit
+            var breakPoint = text.LastIndexOfAny(['.', '!', '?', '\n'], windowEnd - 1, windowSize);
+
+            var length = (breakPoint > start) ? breakPoint - start + 1 : maxLength;
+            var slice  = text.Substring(start, length).Trim();
+
+            if (!string.IsNullOrWhiteSpace(slice))
+                yield return slice;
+
+            start += length;
+        }
+    }
+
+    /// <summary>
+    /// Merges consecutive chunks that are shorter than <see cref="DocumentProcessingOptions.MinChunkCharacters"/>
+    /// into their successor, stopping when the combined text would exceed
+    /// <see cref="DocumentProcessingOptions.MaxChunkCharacters"/>.
+    /// This prevents tiny heading-only or bullet-point chunks from being embedded in isolation.
+    /// </summary>
+    private static List<DocumentChunk> MergeSmallChunks(List<DocumentChunk> chunks, DocumentProcessingOptions options)
+    {
+        if (options.MinChunkCharacters <= 0 || chunks.Count <= 1)
+            return chunks;
+
+        var merged = new List<DocumentChunk>(chunks.Count);
+        var buffer = new System.Text.StringBuilder();
+        int bufferPage = 0;
+        var documentId = chunks[0].DocumentId;
+
+        void FlushBuffer()
+        {
+            if (buffer.Length == 0) return;
+            merged.Add(new DocumentChunk
+            {
+                Id        = Guid.NewGuid(),
+                DocumentId = documentId,
+                ChunkIndex = merged.Count,
+                PageNumber  = bufferPage,
+                Content     = buffer.ToString().Trim()
+            });
+            buffer.Clear();
+        }
+
+        foreach (var chunk in chunks)
+        {
+            if (buffer.Length == 0)
+            {
+                // Start a fresh buffer with this chunk.
+                buffer.Append(chunk.Content);
+                bufferPage = chunk.PageNumber;
+            }
+            else if (buffer.Length < options.MinChunkCharacters &&
+                     buffer.Length + chunk.Content.Length + 2 <= options.MaxChunkCharacters)
+            {
+                // Current buffer is still small AND merged result stays within max — absorb.
+                buffer.Append("\n\n");
+                buffer.Append(chunk.Content);
+            }
+            else
+            {
+                // Flush what we have, start fresh with this chunk.
+                FlushBuffer();
+                buffer.Append(chunk.Content);
+                bufferPage = chunk.PageNumber;
+            }
+        }
+
+        // If last buffered piece is tiny, try to absorb it into the previous merged chunk.
+        if (buffer.Length > 0)
+        {
+            if (merged.Count > 0 && buffer.Length < options.MinChunkCharacters)
+            {
+                var last    = merged[^1];
+                var combined = last.Content + "\n\n" + buffer.ToString().Trim();
+                if (combined.Length <= options.MaxChunkCharacters)
+                {
+                    last.Content = combined;
+                    return merged;   // already attached — no new chunk needed
+                }
+            }
+            FlushBuffer();
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Prepends the last <see cref="DocumentProcessingOptions.ChunkOverlapCharacters"/> characters
+    /// of chunk[i-1] to chunk[i], breaking at a word boundary so the model receives coherent text.
+    /// This preserves context that would otherwise be lost at a hard chunk boundary.
+    /// </summary>
+    private static void ApplyChunkOverlap(List<DocumentChunk> chunks, DocumentProcessingOptions options)
+    {
+        if (options.ChunkOverlapCharacters <= 0 || chunks.Count <= 1)
+            return;
+
+        for (var i = 1; i < chunks.Count; i++)
+        {
+            var prev = chunks[i - 1].Content;
+            if (prev.Length == 0) continue;
+
+            // Take up to ChunkOverlapCharacters from the end of the previous chunk.
+            var overlap = prev.Length <= options.ChunkOverlapCharacters
+                ? prev
+                : prev[^options.ChunkOverlapCharacters..];
+
+            // Trim to the first word boundary so we don't start mid-word.
+            if (prev.Length > options.ChunkOverlapCharacters)
+            {
+                var spaceIdx = overlap.IndexOf(' ');
+                if (spaceIdx > 0)
+                    overlap = overlap[(spaceIdx + 1)..];
+            }
+
+            if (!string.IsNullOrWhiteSpace(overlap))
+                chunks[i].Content = overlap.TrimStart() + "\n\n" + chunks[i].Content;
+        }
     }
 
     private static void AttachEmbeddings(List<DocumentChunk> chunks, IReadOnlyList<float[]> embeddings)
@@ -196,8 +389,17 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         IReadOnlyList<DocumentChunk> chunks,
         IKnowledgeExtractionService knowledgeExtractionService,
         IUnitOfWork unitOfWork,
+        DocumentProcessingOptions options,
         ILogger logger)
     {
+        var extractionDelay = TimeSpan.FromSeconds(options.ExtractionDelaySecs);
+
+        // In-memory dedup across all chunks of this document.
+        // Prevents the overlap prefix from generating duplicate entities/relationships
+        // that were already stored from the previous chunk's main content.
+        var seenEntityNames       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenRelationshipKeys  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         for (var i = 0; i < chunks.Count; i++)
         {
             if (!ShouldExtractKnowledge(chunks[i].Content))
@@ -206,17 +408,45 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             try
             {
                 if (i > 0)
-                    await Task.Delay(ExtractionDelay);
+                    await Task.Delay(extractionDelay);
 
                 var extraction = await knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
 
-                if (extraction.Entities.Count > 0)
-                    await unitOfWork.ExtractedEntities.AddRangeAsync(extraction.Entities);
+                // ── Entity dedup ─────────────────────────────────────────────────────
+                // Keep only entities whose name has not been stored yet for this document.
+                // seenEntityNames.Add() returns false if the name already existed.
+                var newEntities = extraction.Entities
+                    .Where(e => seenEntityNames.Add(e.Name))
+                    .ToList();
 
-                if (extraction.Relationships.Count > 0)
-                    await unitOfWork.ExtractedRelationships.AddRangeAsync(extraction.Relationships);
+                // ── Relationship dedup ────────────────────────────────────────────────
+                // A relationship is only valid if BOTH its source and target are in the
+                // set of entities we're about to insert (same chunk extraction).
+                // Referencing an entity that was filtered out would leave a dangling FK.
+                var validEntityIds = new HashSet<Guid>(newEntities.Select(e => e.Id));
 
-                await unitOfWork.SaveChangesAsync();
+                var newRelationships = extraction.Relationships
+                    .Where(r =>
+                        validEntityIds.Contains(r.SourceEntityId) &&
+                        validEntityIds.Contains(r.TargetEntityId) &&
+                        seenRelationshipKeys.Add(
+                            $"{r.SourceEntityId}|{r.TargetEntityId}|{r.RelationType}"))
+                    .ToList();
+
+                if (newEntities.Count > 0)
+                    await unitOfWork.ExtractedEntities.AddRangeAsync(newEntities);
+
+                if (newRelationships.Count > 0)
+                    await unitOfWork.ExtractedRelationships.AddRangeAsync(newRelationships);
+
+                if (newEntities.Count > 0 || newRelationships.Count > 0)
+                    await unitOfWork.SaveChangesAsync();
+
+                if (newEntities.Count < extraction.Entities.Count)
+                    logger.LogDebug(
+                        "Chunk {ChunkId}: skipped {Dupes} duplicate entities from overlap text.",
+                        chunks[i].Id,
+                        extraction.Entities.Count - newEntities.Count);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
@@ -225,6 +455,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             }
         }
     }
+
 
     private static bool ShouldExtractKnowledge(string content)
     {
@@ -255,16 +486,20 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         await unitOfWork.SaveChangesAsync();
     }
 
-    private static async Task<Document> SaveDocumentRecordAsync(IFormFile file, Guid userId, IUnitOfWork unitOfWork)
+    // FIX 1: Accepts byte[] instead of opening the file stream a second time.
+    private static async Task<Document> SaveDocumentRecordAsync(
+        byte[] fileBytes,
+        string fileName,
+        Guid userId,
+        IUnitOfWork unitOfWork)
     {
-        await using var stream = file.OpenReadStream();
-        var filePath = await SaveFileAsync(stream, file.FileName);
+        var filePath = await SaveFileAsync(fileBytes, fileName);
 
         var document = new Document
         {
             Id = Guid.NewGuid(),
             UserId = userId,
-            Title = Path.GetFileNameWithoutExtension(file.FileName),
+            Title = Path.GetFileNameWithoutExtension(fileName),
             FilePath = filePath,
             Status = DocumentStatus.Pending
         };
@@ -275,7 +510,8 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         return document;
     }
 
-    private static async Task<string> SaveFileAsync(Stream stream, string fileName)
+    // FIX 1: Writes from the already-loaded byte[] — no stream re-read.
+    private static async Task<string> SaveFileAsync(byte[] fileBytes, string fileName)
     {
         var uploadsDir = Path.Combine(Directory.GetCurrentDirectory(), "Uploads");
         Directory.CreateDirectory(uploadsDir);
@@ -283,8 +519,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         var uniqueFileName = $"{Guid.NewGuid()}_{fileName}";
         var filePath = Path.Combine(uploadsDir, uniqueFileName);
 
-        await using var fs = new FileStream(filePath, FileMode.Create);
-        await stream.CopyToAsync(fs);
+        await File.WriteAllBytesAsync(filePath, fileBytes);
 
         return filePath;
     }
