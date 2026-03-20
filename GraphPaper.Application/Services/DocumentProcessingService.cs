@@ -56,17 +56,20 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
     private readonly IClaimsService _claimsService;
     private readonly ILogger<DocumentProcessingService> _logger;
     private readonly DocumentProcessingOptions _options;
+    private readonly OpenXmlDocumentParser _openXmlParser;
 
     public DocumentProcessingService(
         IServiceScopeFactory scopeFactory,
         IClaimsService claimsService,
         ILogger<DocumentProcessingService> logger,
-        IOptions<DocumentProcessingOptions> options)
+        IOptions<DocumentProcessingOptions> options,
+        OpenXmlDocumentParser openXmlParser)
     {
         _scopeFactory = scopeFactory;
         _claimsService = claimsService;
         _logger = logger;
         _options = options.Value;
+        _openXmlParser = openXmlParser;
     }
 
     public async Task<Document> IngestAsync(IFormFile file)
@@ -109,6 +112,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 filePayload,
                 unitOfWork,
                 doclingClient,
+                _openXmlParser,
                 embeddingService,
                 knowledgeExtractionService,
                 _options,
@@ -123,6 +127,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         FilePayload filePayload,
         IUnitOfWork unitOfWork,
         IDoclingClient doclingClient,
+        OpenXmlDocumentParser openXmlParser,
         IEmbeddingService embeddingService,
         IKnowledgeExtractionService knowledgeExtractionService,
         DocumentProcessingOptions options,
@@ -139,8 +144,23 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         {
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Chunking);
 
-            var doclingResult = await doclingClient.ParseAsync(filePayload.FileBytes, filePayload.FileName, filePayload.ContentType);
-            var chunks = BuildChunksFromDocling(doclingResult.Document, document.Id, options, logger);
+            List<DocumentChunk> chunks;
+            var ext = Path.GetExtension(filePayload.FileName).ToLowerInvariant();
+
+            if (ext == ".docx")
+            {
+                var markdown = openXmlParser.ParseToMarkdown(filePayload.FileBytes);
+                if (string.IsNullOrWhiteSpace(markdown))
+                    throw new InvalidOperationException("OpenXml returned empty content.");
+
+                logger.LogInformation("Using OpenXml parser for DOCX document {DocumentId}", documentId);
+                chunks = BuildChunksFromMarkdown(markdown, document.Id, options);
+            }
+            else
+            {
+                var doclingResult = await doclingClient.ParseAsync(filePayload.FileBytes, filePayload.FileName, filePayload.ContentType);
+                chunks = BuildChunksFromDocling(doclingResult.Document, document.Id, options, logger);
+            }
 
             if (chunks.Count == 0)
                 throw new InvalidOperationException("Could not extract any text from the document.");

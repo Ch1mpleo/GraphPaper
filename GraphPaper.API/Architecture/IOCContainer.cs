@@ -66,6 +66,7 @@ public static class IocContainer
         services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
         services.AddScoped<IDocumentReviewService, DocumentReviewService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddSingleton<OpenXmlDocumentParser>();
 
         services.AddHttpContextAccessor();
 

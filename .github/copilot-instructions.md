@@ -33,6 +33,7 @@ You can also use `dotnet watch test` to run the tests automatically when you cha
 ### Document Parsing Strategy
 
 - Prefer a single document parsing strategy (Docling or PdfPig/OpenXml) or introduce an explicit router; avoid registering Docling without using it in the processing pipeline.
+- For document parsing changes, make minimal alterations to maintain the existing PDF Docling flow while adding DOCX support as a parallel branch.
 
 ## GPU Usage
 
