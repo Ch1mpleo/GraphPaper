@@ -27,6 +27,9 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 
     private const string DEFAULT_ENTITY_TYPE = "Khái niệm";
     private const string DEFAULT_RELATION_TYPE = "có_liên_hệ_với";
+    private const int TPM_LOW_WATER_MARK = 2500;
+    private const int MIN_DELAY_MS = 5000;
+    private const int LOW_TOKEN_DELAY_MS = 9000;
 
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
@@ -59,12 +62,16 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             using var response = await client.SendAsync(httpRequest);
 
             if (response.IsSuccessStatusCode)
+            {
+                await ApplyAdaptiveDelayAsync(response.Headers);
                 return await ParseSuccessResponseAsync(response, chunk.Id);
+            }
 
             if ((int)response.StatusCode == 429 && attempt < _options.KnowledgeMaxRetries)
             {
-                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt + 1));
-                await Task.Delay(delay);
+                var retryAfter = GetRetryAfterDelay(response.Headers);
+                var backoff = retryAfter ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
+                await Task.Delay(backoff);
                 continue;
             }
 
@@ -106,6 +113,68 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             return new KnowledgeExtractionResult();
 
         return MapToEntities(extraction, chunkId);
+    }
+
+    private static async Task ApplyAdaptiveDelayAsync(HttpResponseHeaders headers)
+    {
+        var remainingTokens = ParseIntHeader(headers, "x-ratelimit-remaining-tokens");
+
+        if (remainingTokens.HasValue && remainingTokens.Value < TPM_LOW_WATER_MARK)
+        {
+            var resetMs = ParseResetDelayMs(headers, "x-ratelimit-reset-tokens");
+            var waitMs = resetMs.HasValue
+                ? Math.Max(resetMs.Value + 200, LOW_TOKEN_DELAY_MS)
+                : LOW_TOKEN_DELAY_MS;
+            await Task.Delay(waitMs);
+        }
+        else
+        {
+            await Task.Delay(MIN_DELAY_MS);
+        }
+    }
+
+    private static TimeSpan? GetRetryAfterDelay(HttpResponseHeaders headers)
+    {
+        if (!headers.TryGetValues("retry-after", out var values))
+            return null;
+
+        var raw = values.FirstOrDefault();
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+            return TimeSpan.FromSeconds(seconds + 1);
+
+        return null;
+    }
+
+    private static int? ParseIntHeader(HttpResponseHeaders headers, string name)
+    {
+        if (headers.TryGetValues(name, out var values) &&
+            int.TryParse(values.FirstOrDefault(), out var result))
+            return result;
+
+        return null;
+    }
+
+    private static int? ParseResetDelayMs(HttpResponseHeaders headers, string name)
+    {
+        if (!headers.TryGetValues(name, out var values))
+            return null;
+
+        var raw = values.FirstOrDefault()?.Trim();
+        if (string.IsNullOrEmpty(raw))
+            return null;
+
+        if (raw.EndsWith("ms", StringComparison.OrdinalIgnoreCase) &&
+            double.TryParse(raw[..^2], System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var milliseconds))
+            return (int)milliseconds;
+
+        if (raw.EndsWith('s') &&
+            double.TryParse(raw[..^1], System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+            return (int)(seconds * 1000);
+
+        return null;
     }
 
     private static string BuildExtractionPrompt(string chunkContent, int maxChunkLength)

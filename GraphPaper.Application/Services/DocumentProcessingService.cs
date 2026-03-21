@@ -179,7 +179,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await unitOfWork.SaveChangesAsync();
 
-            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, options, logger);
+            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);
         }
@@ -518,10 +518,10 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         IReadOnlyList<DocumentChunk> chunks,
         IKnowledgeExtractionService knowledgeExtractionService,
         IUnitOfWork unitOfWork,
-        DocumentProcessingOptions options,
         ILogger logger)
     {
-        var extractionDelay = TimeSpan.FromSeconds(options.ExtractionDelaySecs);
+        // Delay is managed adaptively inside GroqKnowledgeExtractionService
+        // via x-ratelimit-remaining-tokens / x-ratelimit-reset-tokens headers.
 
         // In-memory dedup across all chunks of this document.
         // Prevents the overlap prefix from generating duplicate entities/relationships
@@ -536,9 +536,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
             try
             {
-                if (i > 0)
-                    await Task.Delay(extractionDelay);
-
                 var extraction = await knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
 
                 // ── Entity dedup ─────────────────────────────────────────────────────

@@ -111,15 +111,15 @@ public sealed class OpenXmlDocumentParser
         if (sb.Length > 0)
             sb.Append('\n');
 
-        var allRows = new List<List<string>>();
-
-        foreach (var row in rows)
-        {
-            var cells = row.Elements<TableCell>()
+        var allRows = rows
+            .Select(row => row.Elements<TableCell>()
                 .Select(ExtractCellText)
-                .ToList();
-            allRows.Add(cells);
-        }
+                .ToList())
+            .Where(cells => cells.Any(c => !string.IsNullOrWhiteSpace(c)))
+            .ToList();
+
+        if (allRows.Count == 0)
+            return;
 
         // Normalize column count across all rows
         var colCount = allRows.Max(r => r.Count);
