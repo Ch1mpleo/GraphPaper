@@ -16,15 +16,17 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
     private const string BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
     private const string MODEL_ID = "llama-3.3-70b-versatile";
 
-    // Vietnamese system prompt: instructs LLM to respond in Vietnamese by default.
     private const string SYSTEM_PROMPT =
-        "Bạn là trợ lý trích xuất đồ thị tri thức. " +
-        "Luôn trả lời bằng tiếng Việt (trừ tên viết tắt tiếng Anh như AI, GPU, M&A). " +
+        "Bạn là chuyên gia phân tích học thuật liên ngành và xây dựng đồ thị tri thức chuyên sâu. " +
+        "Bạn có khả năng phân tích văn bản thuộc mọi lĩnh vực: khoa học tự nhiên, kỹ thuật, khoa học xã hội, " +
+        "kinh tế, y học, luật học, triết học, v.v. " +
+        "Nhiệm vụ: trích xuất KHÁI NIỆM HỌC THUẬT CHÍNH XÁC và MỐI QUAN HỆ CÓ CHIỀU SÂU CHUYÊN MÔN. " +
+        "Ngôn ngữ đầu ra: tiếng Việt (giữ nguyên thuật ngữ kỹ thuật/viết tắt tiếng Anh như AI, GPU, DNA, HTTP, " +
+        "NaCl, O(n log n), IEEE, v.v.). " +
         "Chỉ trả về JSON hợp lệ, không có văn bản nào khác.";
 
-    // Vietnamese fallback values used when LLM omits entityType / relationType.
     private const string DEFAULT_ENTITY_TYPE = "Khái niệm";
-    private const string DEFAULT_RELATION_TYPE = "liên_quan_đến";
+    private const string DEFAULT_RELATION_TYPE = "có_liên_hệ_với";
 
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
@@ -111,32 +113,180 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         var normalizedChunkContent = NormalizeChunkContent(chunkContent, maxChunkLength);
 
         return $$"""
-            Phân tích đoạn văn bản tiếng Việt sau và trích xuất dữ liệu đồ thị tri thức.
+            Phân tích đoạn văn bản học thuật sau và trích xuất đồ thị tri thức với độ chính xác chuyên môn cao.
+            Văn bản có thể thuộc bất kỳ lĩnh vực nào: khoa học máy tính, toán học, vật lý, hóa học, sinh học,
+            địa chất, kinh tế, triết học, y học, luật học, v.v. Hãy nhận diện đúng lĩnh vực và dùng thuật ngữ
+            chuyên ngành phù hợp.
 
-            Trích xuất:
-            1. **Thực thể**: Các khái niệm, con người, phương pháp, công nghệ, tổ chức, địa điểm được đề cập.
-            2. **Quan hệ**: Cách các thực thể liên quan đến nhau.
+            ══════════════════════════════════════════
+            PHẦN 1: TRÍCH XUẤT THỰC THỂ (entities)
+            ══════════════════════════════════════════
 
-            Trả về CHỈ JSON hợp lệ theo định dạng sau:
+            Trích xuất các thực thể TRỌng YẾU được đề cập hoặc định nghĩa trong văn bản.
+            Bỏ qua các từ chung chung không mang nội hàm chuyên môn.
+
+            ── PHÂN LOẠI THỰC THỂ (entityType) ──────────────────────────────────────────
+
+            Chọn ĐÚNG một nhãn phù hợp nhất với lĩnh vực của văn bản:
+
+            [KHÁI NIỆM & LÝ THUYẾT]
+            • "Khái niệm"          — Định nghĩa, thuật ngữ chuyên ngành cơ bản
+                                     CS: thuật toán, hàm băm, đệ quy
+                                     Hóa: liên kết cộng hóa trị, độ âm điện
+                                     Kinh tế: giá trị thặng dư, chi phí cơ hội
+            • "Lý thuyết"          — Hệ thống lý luận, mô hình giải thích hiện tượng
+                                     VD: Lý thuyết tương đối, Lý thuyết trò chơi, Lý thuyết Big Bang
+            • "Định lý/Quy luật"   — Phát biểu có thể chứng minh hoặc quy luật tất yếu
+                                     VD: Định lý Pythagorean, Định luật Newton II, Quy luật giá trị
+            • "Mô hình"            — Biểu diễn trừu tượng hoặc toán học của hệ thống
+                                     VD: Mô hình OSI, Mô hình nguyên tử Bohr, Mô hình hồi quy tuyến tính
+            • "Phương trình/Công thức" — Biểu diễn toán học cụ thể
+                                     VD: E=mc², phương trình Schrödinger, công thức Shannon
+
+            [ĐỐI TƯỢNG & CẤU TRÚC]
+            • "Cấu trúc dữ liệu"   — CS: danh sách liên kết, cây B+, bảng băm, đồ thị
+            • "Thuật toán"         — CS: QuickSort, Dijkstra, backpropagation, gradient descent
+            • "Giao thức/Chuẩn"    — CS/Kỹ thuật: TCP/IP, HTTP/2, IEEE 802.11, REST
+            • "Cấu trúc vật chất"  — Hóa/Vật lý/Địa chất: phân tử, tinh thể, tầng địa chất, hạt nhân
+            • "Hệ thống/Kiến trúc" — Tập hợp các thành phần tương tác có tổ chức
+                                     VD: hệ thần kinh trung ương, kiến trúc von Neumann, hệ sinh thái
+
+            [QUÁ TRÌNH & HIỆN TƯỢNG]
+            • "Quá trình/Phản ứng" — Chuỗi biến đổi có hướng
+                                     Hóa: phản ứng oxi hóa khử, quang hợp
+                                     CS: biên dịch, garbage collection, đồng bộ hóa
+                                     Địa chất: phong hóa, kiến tạo mảng
+            • "Hiện tượng"         — Sự kiện hoặc trạng thái quan sát được
+                                     VD: siêu dẫn, cộng hưởng từ, lạm phát, hiệu ứng quang điện
+            • "Cơ chế"             — Cách thức hoạt động bên trong của một quá trình
+                                     VD: cơ chế khóa mutex, cơ chế phản hồi enzyme, cơ chế độc quyền giá
+
+            [CÔNG CỤ & PHƯƠNG PHÁP]
+            • "Phương pháp"        — Quy trình hoặc kỹ thuật thực hiện
+                                     VD: phương pháp Monte Carlo, phân tích quang phổ, thử nghiệm A/B
+            • "Công cụ/Công nghệ"  — Phần mềm, thiết bị, nền tảng cụ thể
+                                     VD: TensorFlow, máy quang phổ, CRISPR, GPU
+
+            [CHỦ THỂ & TỔ CHỨC]
+            • "Tổ chức/Thể chế"    — Doanh nghiệp, cơ quan, tổ chức, thể chế
+            • "Nhà khoa học/Tác giả" — Người đóng góp vào lĩnh vực học thuật
+            • "Địa danh"           — Vị trí địa lý có ý nghĩa khoa học hoặc kinh tế
+
+            [ĐO LƯỜNG & ĐƠN VỊ]
+            • "Đại lượng/Đơn vị"   — Đại lượng đo lường hoặc đơn vị cụ thể
+                                     VD: entropy (J/K), độ phức tạp O(n²), tỷ suất lợi nhuận (%)
+            • "Chỉ số/Tham số"     — Biến số hoặc hệ số đặc trưng của hệ thống
+
+            [TÀI LIỆU & CHƯƠNG TRÌNH]
+            • "Môn học/Chương trình" — Tên môn học, khóa học, chương trình đào tạo
+            • "Công trình nghiên cứu" — Bài báo, luận văn, đề tài nghiên cứu cụ thể
+
+            ── YÊU CẦU VỀ DESCRIPTION ───────────────────────────────────────────────────
+
+            Mỗi description PHẢI:
+            ✓ Tối thiểu 15 từ, dùng ngôn ngữ học thuật chính xác của lĩnh vực
+            ✓ Nêu rõ BẢN CHẤT hoặc CƠ CHẾ HOẠT ĐỘNG, không chỉ là tên gọi lại
+            ✓ Giải thích ký hiệu toán học/hóa học nếu có (VD: O(n log n), NaCl, m=giá trị thặng dư)
+            ✓ Phân biệt với các khái niệm dễ nhầm lẫn nếu cần thiết
+
+            Ví dụ tốt:
+            - "Cấu trúc dữ liệu lưu trữ ánh xạ khóa-giá trị với thời gian truy xuất trung bình O(1) nhờ hàm băm phân tán các phần tử vào bucket"
+            - "Quá trình tế bào chuyển đổi năng lượng ánh sáng mặt trời thành năng lượng hóa học dưới dạng ATP và NADPH thông qua chuỗi phản ứng sáng và tối"
+            - "Phần giá trị mới do lao động tạo ra vượt quá giá trị sức lao động (v), bị nhà tư bản chiếm đoạt không qua trao đổi ngang giá"
+
+            ══════════════════════════════════════════
+            PHẦN 2: TRÍCH XUẤT MỐI QUAN HỆ (relationships)
+            ══════════════════════════════════════════
+
+            ── PHÂN LOẠI MỐI QUAN HỆ (relationType) ────────────────────────────────────
+
+            Chọn nhãn phản ánh đúng bản chất của mối liên hệ giữa hai thực thể.
+            Dùng tiếng Việt snake_case.
+
+            [QUAN HỆ CẤU TRÚC & PHÂN CẤP]
+            • "là_trường_hợp_đặc_biệt_của"    — A là instance/subtype của B
+                                                  VD: QuickSort → sắp xếp so sánh
+                                                      Axit sulfuric → axit mạnh
+            • "cấu_thành"                      — A là thành phần tạo nên B
+                                                  VD: TCP → cấu_thành → TCP/IP stack
+                                                      Electron → cấu_thành → nguyên tử
+            • "bao_gồm"                        — B là thành phần con của A
+            • "là_trường_hợp_điển_hình_của"    — A là ví dụ minh họa cụ thể của B
+            • "tương_đương_với"                — A và B mô tả cùng một khái niệm theo cách khác nhau
+                                                  VD: lực ≡ đạo hàm động lượng theo thời gian
+
+            [QUAN HỆ NHÂN QUẢ & TÁC ĐỘNG]
+            • "tạo_ra"                         — A trực tiếp sinh ra hoặc sản xuất B
+            • "dẫn_đến"                        — A gây ra B như hệ quả (có thể gián tiếp)
+            • "là_điều_kiện_cần_của"           — A phải tồn tại để B có thể xảy ra
+            • "ngăn_chặn"                      — A ức chế hoặc ngăn cản B
+            • "tăng_cường"                     — A làm gia tăng hiệu quả hoặc quy mô của B
+            • "giảm_thiểu"                     — A làm giảm B
+            • "tối_ưu_hóa"                     — A cải thiện B đến giá trị tốt hơn
+
+            [QUAN HỆ LOGIC & TOÁN HỌC]
+            • "chứng_minh"                     — A cung cấp bằng chứng hoặc suy diễn ra B
+            • "là_tiên_đề_của"                 — A là giả thiết nền tảng để xây dựng B
+            • "xấp_xỉ"                         — A là gần đúng của B trong điều kiện nhất định
+            • "đối_lập_với"                    — A và B mâu thuẫn hoặc phủ nhau
+                                                  VD: axit ↔ bazơ; O(1) ↔ O(n!)
+            • "tương_quan_với"                 — A và B có quan hệ thống kê hoặc biến đổi cùng chiều/ngược chiều
+
+            [QUAN HỆ CHỨC NĂNG & SỬ DỤNG]
+            • "sử_dụng"                        — A dùng B như công cụ hoặc tài nguyên
+            • "hiện_thực_hóa"                  — A là cài đặt/thực thi cụ thể của B (lý thuyết → thực tiễn)
+                                                  VD: TensorFlow → hiện_thực_hóa → mạng nơ-ron nhân tạo
+            • "giải_quyết"                     — A là phương pháp/thuật toán để xử lý B (vấn đề)
+            • "mô_hình_hóa"                    — A là biểu diễn trừu tượng/toán học của B
+            • "đo_lường"                       — A là đại lượng/chỉ số định lượng B
+            • "điều_tiết"                      — A kiểm soát hoặc điều chỉnh B
+
+            [QUAN HỆ NGUỒN GỐC & LỊCH SỬ]
+            • "được_phát_triển_từ"             — A tiến hóa hoặc mở rộng từ B
+            • "là_tiền_đề_của"                 — B ra đời nhờ nền tảng A tạo ra trước đó
+            • "được_đề_xuất_bởi"               — A được giới thiệu hoặc chứng minh bởi B (nhà khoa học)
+            • "thay_thế"                       — A thay thế B trong thực tiễn do ưu thế vượt trội
+
+            [QUAN HỆ BIẾN ĐỔI & CHUYỂN HÓA]
+            • "chuyển_hóa_thành"               — A biến đổi thành B qua quá trình cụ thể
+                                                  VD: ADP + Pi → chuyển_hóa_thành → ATP
+                                                      mã nguồn → chuyển_hóa_thành → bytecode
+            • "là_hình_thức_biểu_hiện_của"     — A là dạng biểu hiện bề ngoài của bản chất B
+            • "phụ_thuộc_vào"                  — Giá trị/hành vi của A bị quyết định bởi B
+
+            ── LƯU Ý KHI CHỌN QUAN HỆ ──────────────────────────────────────────────────
+            • Ưu tiên nhãn đặc thù hơn nhãn chung ("là_nguồn_gốc_của" tốt hơn "liên_quan_đến")
+            • Nếu không có nhãn phù hợp, dùng snake_case mô tả chính xác mối quan hệ
+            • Hướng quan hệ: source → relationType → target phải đọc thành câu có nghĩa
+
+            ══════════════════════════════════════════
+            ĐỊNH DẠNG ĐẦU RA
+            ══════════════════════════════════════════
+
+            Trả về CHỈ JSON hợp lệ:
             {
               "entities": [
-                { "name": "tên thực thể", "entityType": "loại thực thể bằng tiếng Việt", "description": "định nghĩa đầy đủ bằng tiếng Việt" }
+                {
+                  "name": "tên đầy đủ, giữ ký hiệu kỹ thuật nếu có (VD: 'Thuật toán Dijkstra', 'DNA', 'E=mc²')",
+                  "entityType": "nhãn từ danh sách trên",
+                  "description": "định nghĩa học thuật tối thiểu 15 từ, nêu bản chất và cơ chế"
+                }
               ],
               "relationships": [
-                { "source": "tên thực thể nguồn", "target": "tên thực thể đích", "relationType": "loại_quan_hệ", "confidenceScore": 0.0 }
+                {
+                  "source": "tên thực thể nguồn (khớp chính xác với name đã khai báo)",
+                  "target": "tên thực thể đích (khớp chính xác với name đã khai báo)",
+                  "relationType": "nhãn từ danh sách hoặc snake_case mô tả chính xác",
+                  "confidenceScore": 0.0
+                }
               ]
             }
 
             Quy tắc bắt buộc:
-            - Tên thực thể (name) PHẢI giữ nguyên tiếng Việt có dấu — ví dụ: "Giá trị thặng dư", không phải "Surplus Value"
-            - Giữ nguyên viết tắt tiếng Anh phổ biến: AI, GPU, M&A, FPI, VBSP, Agribank, MLN122
-            - entityType PHẢI bằng tiếng Việt — ví dụ: "Khái niệm", "Tổ chức", "Con người", "Phương pháp", "Công nghệ", "Địa điểm", "Môn học", "Phát hiện",...
-            - description PHẢI bằng tiếng Việt, không dùng tiếng Anh
-            - source/target phải khớp chính xác với name của thực thể đã khai báo
-            - relationType dùng tiếng Việt snake_case — ví dụ: "dựa_trên", "sử_dụng", "dẫn_đến", "là_một_phần_của", "liên_quan_đến", "tạo_ra", "đối_lập_với", "điều_chỉnh", "bảo_vệ",...
-            - confidenceScore: mức độ chắc chắn từ 0.0 đến 1.0
-            - Bỏ qua dòng chỉ có markdown và ảnh base64
-            - Nếu không có thực thể, trả về {"entities": [], "relationships": []}
+            - Giữ nguyên thuật ngữ kỹ thuật tiếng Anh/ký hiệu quốc tế (DNA, TCP/IP, O(n²), NaCl, GPU, AI, M&A...)
+            - source/target phải khớp chính xác với name đã khai báo trong entities
+            - confidenceScore: 0.0–1.0, chỉ giữ quan hệ ≥ 0.5
+            - Nếu không có thực thể học thuật, trả về {"entities": [], "relationships": []}
 
             Văn bản:
             {{normalizedChunkContent}}
@@ -233,14 +383,13 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 
     /// <summary>
     /// Capitalises the first character of an entity name.
-    /// Pure ASCII all-caps strings (abbreviations like GPU, AI, FPI) are returned unchanged.
+    /// Pure ASCII all-caps strings (abbreviations like GPU, AI, DNA, TCP) are returned unchanged.
     /// </summary>
     private static string ToVietnameseSentenceCase(string value)
     {
         if (value.Length == 0)
             return value;
 
-        // All-caps ASCII abbreviation → keep as-is (GPU, AI, M&A, FPI, VBSP...)
         var hasLower = value.Any(char.IsLower);
         var hasVietnamese = value.Any(c => c > 127);
         if (!hasLower && !hasVietnamese)
