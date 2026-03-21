@@ -1,4 +1,3 @@
-using GraphPaper.Application;
 using GraphPaper.Application.Interfaces;
 using System.Net.Http.Json;
 using System.Text.Json;

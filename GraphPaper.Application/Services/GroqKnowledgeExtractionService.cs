@@ -1,10 +1,9 @@
-using GraphPaper.Application;
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace GraphPaper.Application.Services;
 
@@ -16,7 +15,17 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 
     private const string BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
     private const string MODEL_ID = "llama-3.3-70b-versatile";
-    private const string SYSTEM_PROMPT = "You are a knowledge graph extraction assistant. Always respond with valid JSON only.";
+
+    // Vietnamese system prompt: instructs LLM to respond in Vietnamese by default.
+    private const string SYSTEM_PROMPT =
+        "Bạn là trợ lý trích xuất đồ thị tri thức. " +
+        "Luôn trả lời bằng tiếng Việt (trừ tên viết tắt tiếng Anh như AI, GPU, M&A). " +
+        "Chỉ trả về JSON hợp lệ, không có văn bản nào khác.";
+
+    // Vietnamese fallback values used when LLM omits entityType / relationType.
+    private const string DEFAULT_ENTITY_TYPE = "Khái niệm";
+    private const string DEFAULT_RELATION_TYPE = "liên_quan_đến";
+
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -75,7 +84,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
             messages = new[]
             {
                 new { role = "system", content = SYSTEM_PROMPT },
-                new { role = "user", content = prompt }
+                new { role = "user",   content = prompt }
             },
             temperature = 0.1,
             response_format = new { type = "json_object" }
@@ -102,31 +111,34 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         var normalizedChunkContent = NormalizeChunkContent(chunkContent, maxChunkLength);
 
         return $$"""
-            Analyze the following text and extract knowledge graph data.
+            Phân tích đoạn văn bản tiếng Việt sau và trích xuất dữ liệu đồ thị tri thức.
 
-            Extract:
-            1. **Entities**: Key concepts, people, methods, technologies, findings mentioned.
-            2. **Relationships**: How entities relate to each other.
+            Trích xuất:
+            1. **Thực thể**: Các khái niệm, con người, phương pháp, công nghệ, tổ chức, địa điểm được đề cập.
+            2. **Quan hệ**: Cách các thực thể liên quan đến nhau.
 
-            Return ONLY valid JSON in this exact format:
+            Trả về CHỈ JSON hợp lệ theo định dạng sau:
             {
               "entities": [
-                { "name": "entity name", "entityType": "Concept|Person|Method|Technology|Finding|Organization|...", "description": "fully definition" }
+                { "name": "tên thực thể", "entityType": "loại thực thể bằng tiếng Việt", "description": "định nghĩa đầy đủ bằng tiếng Việt" }
               ],
               "relationships": [
-                { "source": "source entity name", "target": "target entity name", "relationType": "relationship type", "confidenceScore": 0.0 to 1.0 }
+                { "source": "tên thực thể nguồn", "target": "tên thực thể đích", "relationType": "loại_quan_hệ", "confidenceScore": 0.0 }
               ]
             }
 
-            Rules:
-            - Entity names must be concise and normalized (e.g. "BERT" not "the BERT model")
-            - Relationship source/target must exactly match an entity name
-            - relationType examples: "is_based_on", "uses", "improves", "authored_by", "part_of", "related_to"
-            - confidenceScore: how confident you are about this relationship (0.0 to 1.0)
-            - Ignore markdown-only lines and data URI image blocks
-            - If no entities found, return {"entities": [], "relationships": []}
+            Quy tắc bắt buộc:
+            - Tên thực thể (name) PHẢI giữ nguyên tiếng Việt có dấu — ví dụ: "Giá trị thặng dư", không phải "Surplus Value"
+            - Giữ nguyên viết tắt tiếng Anh phổ biến: AI, GPU, M&A, FPI, VBSP, Agribank, MLN122
+            - entityType PHẢI bằng tiếng Việt — ví dụ: "Khái niệm", "Tổ chức", "Con người", "Phương pháp", "Công nghệ", "Địa điểm", "Môn học", "Phát hiện",...
+            - description PHẢI bằng tiếng Việt, không dùng tiếng Anh
+            - source/target phải khớp chính xác với name của thực thể đã khai báo
+            - relationType dùng tiếng Việt snake_case — ví dụ: "dựa_trên", "sử_dụng", "dẫn_đến", "là_một_phần_của", "liên_quan_đến", "tạo_ra", "đối_lập_với", "điều_chỉnh", "bảo_vệ",...
+            - confidenceScore: mức độ chắc chắn từ 0.0 đến 1.0
+            - Bỏ qua dòng chỉ có markdown và ảnh base64
+            - Nếu không có thực thể, trả về {"entities": [], "relationships": []}
 
-            Text:
+            Văn bản:
             {{normalizedChunkContent}}
             """;
     }
@@ -147,7 +159,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
                 Id = Guid.NewGuid(),
                 ChunkId = chunkId,
                 Name = entityName,
-                EntityType = NormalizeWhitespace(e.EntityType) is { Length: > 0 } type ? type : "Concept",
+                EntityType = NormalizeWhitespace(e.EntityType) is { Length: > 0 } type ? type : DEFAULT_ENTITY_TYPE,
                 Description = NormalizeWhitespace(e.Description)
             };
 
@@ -171,7 +183,7 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
                 Id = Guid.NewGuid(),
                 SourceEntityId = sourceEntity.Id,
                 TargetEntityId = targetEntity.Id,
-                RelationType = NormalizeWhitespace(r.RelationType) is { Length: > 0 } relationType ? relationType : "related_to",
+                RelationType = NormalizeWhitespace(r.RelationType) is { Length: > 0 } rel ? rel : DEFAULT_RELATION_TYPE,
                 ConfidenceScore = confidence
             });
         }
@@ -212,7 +224,29 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        return NormalizeWhitespace(value).Trim('#', '*', '-', '`', ' ');
+        var normalized = NormalizeWhitespace(value).Trim('#', '*', '-', '`', ' ');
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+
+        return ToVietnameseSentenceCase(normalized);
+    }
+
+    /// <summary>
+    /// Capitalises the first character of an entity name.
+    /// Pure ASCII all-caps strings (abbreviations like GPU, AI, FPI) are returned unchanged.
+    /// </summary>
+    private static string ToVietnameseSentenceCase(string value)
+    {
+        if (value.Length == 0)
+            return value;
+
+        // All-caps ASCII abbreviation → keep as-is (GPU, AI, M&A, FPI, VBSP...)
+        var hasLower = value.Any(char.IsLower);
+        var hasVietnamese = value.Any(c => c > 127);
+        if (!hasLower && !hasVietnamese)
+            return value;
+
+        return char.ToUpperInvariant(value[0]) + value[1..];
     }
 
     private static string NormalizeWhitespace(string? value)
