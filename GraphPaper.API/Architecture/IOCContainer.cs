@@ -164,6 +164,8 @@ public static class IocContainer
     {
         var geminiApiKey = configuration["GEMINI_API_KEY"]
                            ?? throw new InvalidOperationException("Gemini API Key is missing.");
+        var geminiKnowledgeApiKey = configuration["GEMINI_KNOWLEDGE_API_KEY"]
+                                    ?? throw new InvalidOperationException("Gemini Knowledge API Key is missing.");
 
         // Bind DocumentProcessingOptions from appsettings.json section
         services.Configure<DocumentProcessingOptions>(
@@ -203,7 +205,7 @@ public static class IocContainer
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             var options = sp.GetRequiredService<IOptions<DocumentProcessingOptions>>().Value;
-            return new GeminiKnowledgeExtractionService(factory, geminiApiKey, options);
+            return new GeminiKnowledgeExtractionService(factory, geminiKnowledgeApiKey, options);
         });
 
         return services;

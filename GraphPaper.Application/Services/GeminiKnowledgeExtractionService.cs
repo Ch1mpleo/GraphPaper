@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace GraphPaper.Application.Services;
 
 /// <summary>
-/// Knowledge extraction service backed by Gemini 2.0 Flash.
+/// Knowledge extraction service backed by Gemini 2.5 Flash.
 /// Free tier: 1,500 RPD, 1,000,000 TPM — no daily token cap.
 /// </summary>
 public sealed class GeminiKnowledgeExtractionService : IKnowledgeExtractionService
@@ -16,8 +16,8 @@ public sealed class GeminiKnowledgeExtractionService : IKnowledgeExtractionServi
     private readonly string _apiKey;
     private readonly DocumentProcessingOptions _options;
 
-    // gemini-2.0-flash: best free-tier model for structured JSON extraction
-    private const string MODEL_ID = "gemini-2.0-flash";
+    // gemini-2.5-flash/gemini-2.0-flash-lite: stable release for structured JSON extraction
+    private const string MODEL_ID = "gemini-2.0-flash-lite";
     private const string BASE_URL_TEMPLATE =
         "v1beta/models/{0}:generateContent?key={1}";
 
