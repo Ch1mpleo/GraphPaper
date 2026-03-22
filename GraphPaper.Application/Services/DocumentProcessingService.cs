@@ -25,6 +25,11 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
     private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly string[] ReferenceHeadingKeywords =
+    [
+        "tài liệu tham khảo", "nguồn trích dẫn",
+        "references", "bibliography", "sources"
+    ];
 
     // Strips base64 image blocks, decodes HTML entities, and collapses excess whitespace.
     private static string CleanContent(string? text)
@@ -49,6 +54,9 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             cleaned,
             @"([^.\n!?])\n\n([A-Za-z\u00c0-\u01ff])",
             "$1 $2");
+
+        // Remove Unicode replacement characters that can appear from image descriptions
+        cleaned = cleaned.Replace("\uFFFD", string.Empty);
 
         return cleaned.Trim();
     }
@@ -243,6 +251,9 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             if (string.IsNullOrWhiteSpace(content))
                 continue;
 
+            if (IsReferenceChunk(content))
+                continue;
+
             chunks.Add(new DocumentChunk
             {
                 Id = Guid.NewGuid(),
@@ -291,6 +302,9 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         foreach (var section in sections)
         {
+            if (IsReferenceChunk(section))
+                continue;
+
             if (section.Length <= options.MaxChunkCharacters)
             {
                 // ── Small section: store as one chunk ──────────────────────────────
@@ -656,6 +670,32 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             l.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
 
         return (double)urlCount / lines.Length < 0.5;
+    }
+
+    private static bool IsReferenceChunk(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        var trimmed = content.TrimStart();
+
+        if (trimmed.StartsWith('#'))
+        {
+            var headingText = trimmed.TrimStart('#').Trim().ToLowerInvariant();
+            if (ReferenceHeadingKeywords.Any(k => headingText.Contains(k)))
+                return true;
+        }
+
+        var lines = content.Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+            return false;
+
+        var urlCount = lines.Count(l =>
+            l.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            l.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+
+        return (double)urlCount / lines.Length >= 0.5;
     }
 
     private static string NormalizeEntityKey(string name)

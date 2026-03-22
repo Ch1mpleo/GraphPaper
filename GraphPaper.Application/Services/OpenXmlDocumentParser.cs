@@ -250,6 +250,11 @@ public sealed class OpenXmlDocumentParser
     private async Task<string> DescribeImageAsync(string mimeType, byte[] bytes)
     {
         var description = await _visionService.DescribeAsync(bytes, mimeType);
+
+        description = description
+            .Replace("\uFFFD", string.Empty)
+            .Trim();
+
         if (string.IsNullOrWhiteSpace(description))
             return "[hình]";
         return description.Length > 2 ? $"[{description.Trim('[', ']')}]" : description;

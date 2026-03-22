@@ -99,7 +99,10 @@ public sealed class GeminiVisionService : IImageDescriptionService
                 .GetProperty("text")
                 .GetString() ?? string.Empty;
 
-            return text.Trim().Trim('`', '*', '_');
+            return text
+                .Replace("\uFFFD", string.Empty)
+                .Trim()
+                .Trim('`', '*', '_');
         }
         catch
         {

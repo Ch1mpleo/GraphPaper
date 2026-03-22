@@ -253,10 +253,11 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
         return $$"""
             Phân tích đoạn văn bản học thuật sau và trích xuất đồ thị tri thức.
 
-            THỰC THỂ (entityType): Khái niệm | Lý thuyết | Định lý/Quy luật | Mô hình |
+            THỰC THỂ (entityType): Khái niệm (ý tưởng, phạm trù, thuật ngữ học thuật trừu tượng) | Lý thuyết | Định lý/Quy luật | Mô hình |
             Phương trình/Công thức | Thuật toán | Cấu trúc dữ liệu | Giao thức/Chuẩn |
             Quá trình/Phản ứng | Hiện tượng | Cơ chế | Phương pháp | Công cụ/Công nghệ |
-            Tổ chức/Thể chế | Đại lượng/Đơn vị | Môn học/Chương trình
+            Tổ chức/Thể chế | Đại lượng/Đơn vị (chỉ dùng cho đơn vị đo lường và chỉ số định lượng, ví dụ: kg, m/s, GDP, tỷ lệ %) |
+            Môn học/Chương trình
 
             MỐI QUAN HỆ (relationType snake_case): là_trường_hợp_đặc_biệt_của | cấu_thành |
             bao_gồm | tạo_ra | dẫn_đến | là_điều_kiện_cần_của | ngăn_chặn | tăng_cường |
