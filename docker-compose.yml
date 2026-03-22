@@ -7,28 +7,21 @@
     depends_on:
       graphpaper.database:
         condition: service_healthy
+      graphpaper.ollama-init:
+        condition: service_completed_successfully
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      # Connection String
       - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
-
-      # AI & Auth Settings
       - GEMINI_API_KEY=AIzaSyD8FJHoheKZpwoki0xCIY_mkbboPzLrlu0
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - OLLAMA_MODEL=llama3.1:8b
+      - OLLAMA_BASE_URL=http://graphpaper.ollama:11434
+      - OLLAMA_MODEL=qwen2.5:14b
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
-      
-      # Storage Settings (MinIO)
-      # - MINIO_ENDPOINT=graphpaper.minio:9000
-      # - MINIO_ACCESS_KEY=minioadmin 
-      # - MINIO_SECRET_KEY=minioadmin
     ports:
       - "5000:5000"
 
   graphpaper.database:
-    # IMPORTANT: Xài chuẩn pgvector image cho AI support
     image: pgvector/pgvector:pg16
     container_name: graphpaper_db
     restart: always
@@ -45,6 +38,55 @@
       interval: 3s
       timeout: 3s
       retries: 10
+
+  graphpaper.ollama:
+    image: ollama/ollama:latest
+    container_name: graphpaper_ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_GPU_LAYERS=99
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  # One-shot init container: pulls model if not already present, then exits.
+  # ollama_data volume persists across docker compose down (without -v),
+  # so subsequent starts skip the pull and complete instantly.
+  graphpaper.ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      graphpaper.ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://graphpaper.ollama:11434
+    entrypoint: >
+      sh -c "
+        echo 'Checking if qwen2.5:14b is already pulled...';
+        if ollama list | grep -q 'qwen2.5:14b'; then
+          echo 'Model qwen2.5:14b already exists. Skipping pull.';
+        else
+          echo 'Pulling qwen2.5:14b (first time only, ~9GB)...';
+          ollama pull qwen2.5:14b;
+          echo 'Pull complete.';
+        fi
+      "
+    restart: "no"
 
   # GPU version (RTX 5060 Ti - Blackwell SM 120)
   graphpaper.parser:
@@ -69,21 +111,6 @@
               count: all
               capabilities: [gpu, compute, utility]
 
-
-  # Nào xài thì mở
-  # graphpaper.minio:
-  #   image: minio/minio
-  #   container_name: graphpaper_minio
-  #   ports:
-  #     - "9000:9000"
-  #     - "9001:9001"
-  #   environment:
-  #     MINIO_ROOT_USER: minioadmin
-  #     MINIO_ROOT_PASSWORD: minioadmin
-  #   command: server /data --console-address ":9001"
-  #   volumes:
-  #     - minio_data:/data
-
 volumes:
   pg_graph_data:
-  # minio_data:
+  ollama_data:
