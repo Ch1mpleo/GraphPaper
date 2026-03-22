@@ -1,0 +1,50 @@
+services:
+  graphpaper.ollama:
+    image: ollama/ollama:latest
+    container_name: graphpaper_ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_GPU_LAYERS=99
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  graphpaper.ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      graphpaper.ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://graphpaper.ollama:11434
+    entrypoint: >
+      sh -c "
+        echo 'Checking if qwen2.5:14b is already pulled...';
+        if ollama list | grep -q 'qwen2.5:14b'; then
+          echo 'Model qwen2.5:14b already exists. Skipping pull.';
+        else
+          echo 'Pulling qwen2.5:14b (first time only, ~9GB)...';
+          ollama pull qwen2.5:14b;
+          echo 'Pull complete.';
+        fi
+      "
+    restart: "no"
+
+volumes:
+  ollama_data:
+    name: ollama_data_persistent

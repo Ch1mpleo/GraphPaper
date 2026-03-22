@@ -113,7 +113,7 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
         options = new
         {
             temperature = 0.1,
-            num_predict = 4096
+            num_predict = 8192
         }
     };
 
@@ -215,17 +215,34 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
 
     private static bool TryDeserialize(string content, out ExtractionSchema? schema)
     {
-        schema = JsonSerializer.Deserialize<ExtractionSchema>(content, JsonOptions);
-        if (schema is not null)
-            return true;
+        schema = null;
 
-        var first = content.IndexOf('{');
-        var last = content.LastIndexOf('}');
-        if (first < 0 || last <= first)
+        try
+        {
+            schema = JsonSerializer.Deserialize<ExtractionSchema>(content, JsonOptions);
+            if (schema is not null)
+                return true;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            var first = content.IndexOf('{');
+            var last = content.LastIndexOf('}');
+            if (first < 0 || last <= first)
+                return false;
+
+            schema = JsonSerializer.Deserialize<ExtractionSchema>(
+                content[first..(last + 1)], JsonOptions);
+
+            return schema is not null;
+        }
+        catch
+        {
             return false;
-
-        schema = JsonSerializer.Deserialize<ExtractionSchema>(content[first..(last + 1)], JsonOptions);
-        return schema is not null;
+        }
     }
 
     private static string BuildExtractionPrompt(string content, int maxLength)
