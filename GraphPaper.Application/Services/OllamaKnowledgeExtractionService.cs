@@ -44,7 +44,7 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
     private const string SYSTEM_PROMPT =
         "Bạn là chuyên gia phân tích học thuật liên ngành và xây dựng đồ thị tri thức chuyên sâu. " +
         "Bạn có khả năng phân tích văn bản thuộc mọi lĩnh vực. " +
-        "Nhiệm vụ: trích xuất KHÁI NIỆM HỌC THUẬT CHÍNH XÁC và MỐI QUAN HỆ CÓ CHIỀU SÂU CHUYÊN MÔN. " +
+        "Nhiệm vụ: trích xuất KHÁI NIỆM HỌC THUẬT CHÍNH XÁC, KHÁI NIỆM/ĐỊNH NGHĨA CHÍNH XÁC ĐẦY ĐỦ và MỐI QUAN HỆ CÓ CHIỀU SÂU CHUYÊN MÔN. " +
         "Ngôn ngữ đầu ra: tiếng Việt (giữ nguyên thuật ngữ kỹ thuật/viết tắt tiếng Anh). " +
         "Chỉ trả về JSON hợp lệ, không có văn bản nào khác, không có markdown code fence.";
 
@@ -248,7 +248,7 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
 
             Trả về JSON hợp lệ:
             {
-              "entities": [{"name": "...", "entityType": "...", "description": "tối thiểu 15 từ"}],
+              "entities": [{"name": "...", "entityType": "...", "description": "KHÁI NIỆM/ĐỊNH NGHĨA tối thiểu 15 từ"}],
               "relationships": [{"source": "...", "target": "...", "relationType": "...", "confidenceScore": 0.0}]
             }
 
