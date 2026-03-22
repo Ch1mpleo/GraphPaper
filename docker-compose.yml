@@ -14,7 +14,8 @@
 
       # AI & Auth Settings
       - GEMINI_API_KEY=AIzaSyD8FJHoheKZpwoki0xCIY_mkbboPzLrlu0
-      - GROQ_API_KEY=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
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=llama3.1:8b
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience

@@ -180,10 +180,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await unitOfWork.SaveChangesAsync();
 
-            // Wait for Gemini rate-limit window to clear before starting extraction.
-            // Embedding uses the same API key and may have exhausted short-window quota.
-            await Task.Delay(TimeSpan.FromSeconds(10));
-
             await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);

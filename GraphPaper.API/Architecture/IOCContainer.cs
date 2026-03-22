@@ -164,8 +164,8 @@ public static class IocContainer
     {
         var geminiApiKey = configuration["GEMINI_API_KEY"]
                            ?? throw new InvalidOperationException("Gemini API Key is missing.");
-        var geminiKnowledgeApiKey = configuration["GEMINI_KNOWLEDGE_API_KEY"]
-                                    ?? throw new InvalidOperationException("Gemini Knowledge API Key is missing.");
+        var ollamaBaseUrl = configuration["OLLAMA_BASE_URL"] ?? "http://host.docker.internal:11434";
+        var ollamaModel = configuration["OLLAMA_MODEL"] ?? "llama3.1:8b";
 
         // Bind DocumentProcessingOptions from appsettings.json section
         services.Configure<DocumentProcessingOptions>(
@@ -181,6 +181,10 @@ public static class IocContainer
         {
             client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
             client.Timeout = TimeSpan.FromMinutes(2);
+        });
+        services.AddHttpClient("Ollama", client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(5);
         });
         services.AddHttpClient("GroqKnowledge", client =>
         {
@@ -205,7 +209,7 @@ public static class IocContainer
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             var options = sp.GetRequiredService<IOptions<DocumentProcessingOptions>>().Value;
-            return new GeminiKnowledgeExtractionService(factory, geminiKnowledgeApiKey, options);
+            return new OllamaKnowledgeExtractionService(factory, options, ollamaBaseUrl, ollamaModel);
         });
 
         return services;
