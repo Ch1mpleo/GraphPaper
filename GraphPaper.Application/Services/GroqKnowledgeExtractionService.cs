@@ -1,5 +1,6 @@
 using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
+using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -28,10 +29,13 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
     private const string DEFAULT_ENTITY_TYPE = "Khái niệm";
     private const string DEFAULT_RELATION_TYPE = "có_liên_hệ_với";
     private const int TPM_LOW_WATER_MARK = 2500;
-    private const int MIN_DELAY_MS = 5000;
-    private const int LOW_TOKEN_DELAY_MS = 9000;
+    private const int MIN_DELAY_MS = 12000;
+    private const int LOW_TOKEN_DELAY_MS = 15000;
 
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex RetryAfterBodyRegex =
+        new(@"try again in (\d+(?:\.\d+)?)(?:m(\d+(?:\.\d+)?))?(ms|s)?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -69,7 +73,13 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
 
             if ((int)response.StatusCode == 429 && attempt < _options.KnowledgeMaxRetries)
             {
-                var retryAfter = GetRetryAfterDelay(response.Headers);
+                var retryAfter = await ParseRetryAfterFromBodyAsync(response);
+
+                if (retryAfter.HasValue && retryAfter.Value.TotalMinutes > 5)
+                    throw new HttpRequestException(
+                        $"Groq daily token limit (TPD) reached. Reset in {retryAfter.Value:mm\\mss\\s}. " +
+                        $"Remaining chunks will be skipped.");
+
                 var backoff = retryAfter ?? TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
                 await Task.Delay(backoff);
                 continue;
@@ -115,9 +125,17 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         return MapToEntities(extraction, chunkId);
     }
 
-    private static async Task ApplyAdaptiveDelayAsync(HttpResponseHeaders headers)
+    private static async Task ApplyAdaptiveDelayAsync(HttpResponseHeaders headers, ILogger? logger = null)
     {
         var remainingTokens = ParseIntHeader(headers, "x-ratelimit-remaining-tokens");
+        var resetTokens = headers.TryGetValues("x-ratelimit-reset-tokens", out var values)
+            ? values.FirstOrDefault()
+            : "N/A";
+
+        logger?.LogDebug(
+            "Groq rate-limit: remaining={Remaining} reset={Reset}",
+            remainingTokens?.ToString() ?? "N/A",
+            resetTokens);
 
         if (remainingTokens.HasValue && remainingTokens.Value < TPM_LOW_WATER_MARK)
         {
@@ -133,15 +151,59 @@ public sealed class GroqKnowledgeExtractionService : IKnowledgeExtractionService
         }
     }
 
-    private static TimeSpan? GetRetryAfterDelay(HttpResponseHeaders headers)
+    private static async Task<TimeSpan?> ParseRetryAfterFromBodyAsync(HttpResponseMessage response)
     {
-        if (!headers.TryGetValues("retry-after", out var values))
-            return null;
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync();
 
-        var raw = values.FirstOrDefault();
-        if (double.TryParse(raw, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var seconds))
-            return TimeSpan.FromSeconds(seconds + 1);
+            var match = RetryAfterBodyRegex.Match(body);
+            if (match.Success)
+            {
+                var first = double.Parse(match.Groups[1].Value,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var secondGroup = match.Groups[2].Value;
+                var unit = match.Groups[3].Value.ToLowerInvariant();
+
+                if (!string.IsNullOrWhiteSpace(secondGroup))
+                {
+                    var seconds = double.Parse(secondGroup,
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    return TimeSpan.FromSeconds(first * 60 + seconds + 1);
+                }
+
+                if (unit == "ms")
+                    return TimeSpan.FromMilliseconds(first + 500);
+
+                if (unit == "s")
+                    return TimeSpan.FromSeconds(first + 1);
+            }
+
+            var mMatch = Regex.Match(body, @"(\d+)m(\d+(?:\.\d+)?)s");
+            if (mMatch.Success)
+            {
+                var minutes = double.Parse(mMatch.Groups[1].Value,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var seconds = double.Parse(mMatch.Groups[2].Value,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                return TimeSpan.FromSeconds(minutes * 60 + seconds + 1);
+            }
+
+            var sMatch = Regex.Match(body, @"(\d+(?:\.\d+)?)(ms|s)\b", RegexOptions.IgnoreCase);
+            if (sMatch.Success)
+            {
+                var value = double.Parse(sMatch.Groups[1].Value,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var unit = sMatch.Groups[2].Value;
+                return unit.Equals("ms", StringComparison.OrdinalIgnoreCase)
+                    ? TimeSpan.FromMilliseconds(value + 500)
+                    : TimeSpan.FromSeconds(value + 1);
+            }
+        }
+        catch
+        {
+            return null;
+        }
 
         return null;
     }
