@@ -66,7 +66,6 @@ public static class IocContainer
         services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
         services.AddScoped<IDocumentReviewService, DocumentReviewService>();
         services.AddScoped<IAuthService, AuthService>();
-        services.AddSingleton<OpenXmlDocumentParser>();
 
         services.AddHttpContextAccessor();
 
@@ -164,6 +163,8 @@ public static class IocContainer
     {
         var geminiApiKey = configuration["GEMINI_API_KEY"]
                            ?? throw new InvalidOperationException("Gemini API Key is missing.");
+        var geminiKnowledgeApiKey = configuration["GEMINI_KNOWLEDGE_API_KEY"]
+            ?? throw new InvalidOperationException("GEMINI_KNOWLEDGE_API_KEY is missing.");
         var ollamaBaseUrl = configuration["OLLAMA_BASE_URL"] ?? "http://host.docker.internal:11434";
         var ollamaModel = configuration["OLLAMA_MODEL"] ?? "llama3.1:8b";
 
@@ -182,6 +183,19 @@ public static class IocContainer
             client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
             client.Timeout = TimeSpan.FromMinutes(2);
         });
+
+        services.AddSingleton<IImageDescriptionService>(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new GeminiVisionService(factory, geminiKnowledgeApiKey);
+        });
+
+        services.AddSingleton<OpenXmlDocumentParser>(sp =>
+        {
+            var vision = sp.GetRequiredService<IImageDescriptionService>();
+            return new OpenXmlDocumentParser(vision);
+        });
+
         services.AddHttpClient("Ollama", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(5);

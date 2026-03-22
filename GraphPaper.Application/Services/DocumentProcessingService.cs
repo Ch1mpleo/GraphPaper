@@ -150,7 +150,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
             if (ext == ".docx")
             {
-                var markdown = openXmlParser.ParseToMarkdown(filePayload.FileBytes);
+                var markdown = await openXmlParser.ParseToMarkdownAsync(filePayload.FileBytes);
                 if (string.IsNullOrWhiteSpace(markdown))
                     throw new InvalidOperationException("OpenXml returned empty content.");
 
@@ -172,10 +172,13 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Extracting);
 
-            var texts = chunks.Select(c => c.Content).ToList();
-            var embeddings = await embeddingService.GetBatchEmbeddingsAsync(texts);
-
-            AttachEmbeddings(chunks, embeddings);
+            var embeddableChunks = chunks.Where(c => ShouldEmbed(c.Content)).ToList();
+            if (embeddableChunks.Count > 0)
+            {
+                var texts = embeddableChunks.Select(c => c.Content).ToList();
+                var embeddings = await embeddingService.GetBatchEmbeddingsAsync(texts);
+                AttachEmbeddings(embeddableChunks, embeddings);
+            }
 
             await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await unitOfWork.SaveChangesAsync();
@@ -550,7 +553,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         // In-memory dedup across all chunks of this document.
         // Prevents the overlap prefix from generating duplicate entities/relationships
         // that were already stored from the previous chunk's main content.
-        var seenEntityNames       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenEntityKeys       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenRelationshipKeys  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < chunks.Count; i++)
@@ -566,7 +569,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 // Keep only entities whose name has not been stored yet for this document.
                 // seenEntityNames.Add() returns false if the name already existed.
                 var newEntities = extraction.Entities
-                    .Where(e => seenEntityNames.Add(e.Name))
+                    .Where(e => seenEntityKeys.Add(NormalizeEntityKey(e.Name)))
                     .ToList();
 
                 // ── Relationship dedup ────────────────────────────────────────────────
@@ -637,6 +640,34 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         var alphaNumericCount = normalized.Count(char.IsLetterOrDigit);
         return alphaNumericCount >= 20;
+    }
+
+    private static bool ShouldEmbed(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content) || content.Trim().Length < 20)
+            return false;
+
+        var lines = content.Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0) return false;
+
+        var urlCount = lines.Count(l =>
+            l.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            l.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+
+        return (double)urlCount / lines.Length < 0.5;
+    }
+
+    private static string NormalizeEntityKey(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+        return name
+            .ToUpperInvariant()
+            .Replace("XHCN", "XÃ HỘI CHỦ NGHĨA")
+            .Replace("KTTT", "KINH TẾ THỊ TRƯỜNG")
+            .Replace("TBCN", "TƯ BẢN CHỦ NGHĨA")
+            .Replace("  ", " ")
+            .Trim();
     }
 
     private static async Task UpdateDocumentStatusAsync(

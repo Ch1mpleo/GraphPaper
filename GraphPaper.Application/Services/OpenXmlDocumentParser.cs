@@ -1,28 +1,22 @@
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Math;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using GraphPaper.Application.Interfaces;
 using System.Text;
 using System.Text.RegularExpressions;
-using OfficeMath = DocumentFormat.OpenXml.Math.OfficeMath;
-using MathText = DocumentFormat.OpenXml.Math.Text;
 
 namespace GraphPaper.Application.Services;
 
 /// <summary>
 /// Parses DOCX files natively using DocumentFormat.OpenXml.
-/// Handles:
-///   - Heading hierarchy (Heading1–Heading4 ? ##/###/####)
-///   - numPr-based list items at all indent levels (ilvl 0, 1, 2…)
-///   - Tables ? GitHub-flavored markdown tables
-///   - OMML equations ? plain-text approximation
-///   - Symbol font characters ? ASCII mapping
-///   - Standalone footnote markers (e.g. "1\n") ? stripped
+/// Inline image formulas are described by IImageDescriptionService (Gemini Vision)
+/// with SHA-256 cache — duplicate images cost 0 extra API calls.
 /// </summary>
 public sealed class OpenXmlDocumentParser
 {
-    // Strips standalone footnote/endnote reference numbers that appear as
-    // a lone digit (or short digit sequence) on their own line.
-    // Pattern: line that is ONLY digits (optionally surrounded by whitespace).
+    private readonly IImageDescriptionService _visionService;
+
     private static readonly Regex FootnoteMarkerRegex =
         new(@"(?m)^\s*\d{1,3}\s*$", RegexOptions.Compiled);
 
@@ -35,78 +29,90 @@ public sealed class OpenXmlDocumentParser
             ["Heading4"] = ("#### ", 4),
         };
 
-    /// <summary>
-    /// Parses a DOCX byte array into a markdown string, preserving
-    /// heading hierarchy, list indent levels, tables, and equations.
-    /// </summary>
-    public string ParseToMarkdown(byte[] fileBytes)
+    public OpenXmlDocumentParser(IImageDescriptionService visionService)
+    {
+        _visionService = visionService;
+    }
+
+    public async Task<string> ParseToMarkdownAsync(byte[] fileBytes)
     {
         using var stream = new MemoryStream(fileBytes);
         using var wordDoc = WordprocessingDocument.Open(stream, isEditable: false);
 
-        var body = wordDoc.MainDocumentPart?.Document?.Body
+        var mainPart = wordDoc.MainDocumentPart
+            ?? throw new InvalidOperationException("Invalid DOCX: MainDocumentPart not found.");
+
+        var body = mainPart.Document?.Body
             ?? throw new InvalidOperationException("Invalid DOCX: body not found.");
 
+        var ridToImage = BuildRidToImageMap(mainPart);
         var sb = new StringBuilder();
 
-        // Iterate top-level block elements in document order.
-        // This preserves the interleaving of paragraphs and tables.
         foreach (var element in body.Elements<OpenXmlElement>())
         {
             switch (element)
             {
-                case Paragraph para:
-                    AppendParagraph(sb, para);
+                case DocumentFormat.OpenXml.Wordprocessing.Paragraph para:
+                    await AppendParagraphAsync(sb, para, ridToImage);
                     break;
-
-                case OfficeMath oMath:
-                    AppendMathBlock(sb, oMath);
-                    break;
-
                 case Table table:
-                    AppendTable(sb, table);
+                    await AppendTableAsync(sb, table, ridToImage);
                     break;
-
-                    // Ignore other block-level elements (bookmarks, custom xml, etc.)
             }
         }
 
         var raw = sb.ToString().Trim();
-
-        // Fix 3: Strip standalone footnote marker lines (e.g. lone "1" left by
-        // footnote reference runs that have no useful text content).
-        return FootnoteMarkerRegex.Replace(raw, string.Empty).Trim();
+        raw = FootnoteMarkerRegex.Replace(raw, string.Empty).Trim();
+        raw = Regex.Replace(raw, @"\n{3,}", "\n\n");
+        return raw;
     }
 
-    private static void AppendMathBlock(StringBuilder sb, OfficeMath oMath)
+    private static Dictionary<string, (string MimeType, byte[] Bytes)> BuildRidToImageMap(
+        MainDocumentPart mainPart)
     {
-        var text = ExtractEquationText(oMath);
-        if (string.IsNullOrWhiteSpace(text))
-            return;
+        var map = new Dictionary<string, (string, byte[])>(StringComparer.OrdinalIgnoreCase);
 
-        if (sb.Length > 0)
-            sb.Append('\n');
+        foreach (var rel in mainPart.Parts)
+        {
+            if (rel.OpenXmlPart is not ImagePart imagePart)
+                continue;
+            try
+            {
+                using var imgStream = imagePart.GetStream();
+                using var ms = new MemoryStream();
+                imgStream.CopyTo(ms);
+                var mimeType = imagePart.ContentType ?? InferMimeType(imagePart.Uri.ToString());
+                map[rel.RelationshipId] = (mimeType, ms.ToArray());
+            }
+            catch { }
+        }
 
-        sb.Append(text).Append('\n');
+        return map;
     }
 
-    // ??????????????????????????????????????????????????????????????????????????
-    // Paragraph
-    // ??????????????????????????????????????????????????????????????????????????
+    private static string InferMimeType(string uri) =>
+        Path.GetExtension(uri).ToLowerInvariant() switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            _ => "image/png"
+        };
 
-    private static void AppendParagraph(StringBuilder sb, Paragraph para)
+    private async Task AppendParagraphAsync(
+        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Paragraph para,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
     {
         var styleId = para.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "Normal";
-        var text = ExtractParagraphText(para);
+        var text = await ExtractParagraphTextAsync(para, ridToImage);
 
         if (string.IsNullOrWhiteSpace(text))
             return;
 
         if (HeadingMap.TryGetValue(styleId, out var heading))
         {
-            if (sb.Length > 0)
-                sb.Append('\n');
-
+            if (sb.Length > 0) sb.Append('\n');
             sb.Append(heading.Prefix).Append(text).Append('\n');
         }
         else
@@ -116,48 +122,41 @@ public sealed class OpenXmlDocumentParser
         }
     }
 
-    // ??????????????????????????????????????????????????????????????????????????
-    // Fix 1: Table ? GFM markdown table
-    // ??????????????????????????????????????????????????????????????????????????
-
-    private static void AppendTable(StringBuilder sb, Table table)
+    private async Task AppendTableAsync(
+        StringBuilder sb, Table table,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
     {
         var rows = table.Elements<TableRow>().ToList();
-        if (rows.Count == 0)
-            return;
+        if (rows.Count == 0) return;
 
-        if (sb.Length > 0)
-            sb.Append('\n');
+        if (sb.Length > 0) sb.Append('\n');
 
-        var allRows = rows
-            .Select(row => row.Elements<TableCell>()
-                .Select(ExtractCellText)
-                .ToList())
-            .Where(cells => cells.Any(c => !string.IsNullOrWhiteSpace(c)))
-            .ToList();
+        var allRows = new List<List<string>>();
+        foreach (var row in rows)
+        {
+            var cells = new List<string>();
+            foreach (var cell in row.Elements<TableCell>())
+            {
+                var parts = new List<string>();
+                foreach (var p in cell.Elements<DocumentFormat.OpenXml.Wordprocessing.Paragraph>())
+                {
+                    var t = (await ExtractParagraphTextAsync(p, ridToImage)).Trim();
+                    if (!string.IsNullOrEmpty(t)) parts.Add(t);
+                }
+                cells.Add(string.Join(" ", parts));
+            }
+            allRows.Add(cells);
+        }
 
-        if (allRows.Count == 0)
-            return;
-
-        // Normalize column count across all rows
         var colCount = allRows.Max(r => r.Count);
         foreach (var row in allRows)
-            while (row.Count < colCount)
-                row.Add(string.Empty);
+            while (row.Count < colCount) row.Add(string.Empty);
 
-        // Emit header row (first row)
         AppendTableRow(sb, allRows[0]);
-
-        // Emit GFM separator row
         sb.Append('|');
-        for (var c = 0; c < colCount; c++)
-            sb.Append(" --- |");
+        for (var c = 0; c < colCount; c++) sb.Append(" --- |");
         sb.Append('\n');
-
-        // Emit data rows
-        for (var r = 1; r < allRows.Count; r++)
-            AppendTableRow(sb, allRows[r]);
-
+        for (var r = 1; r < allRows.Count; r++) AppendTableRow(sb, allRows[r]);
         sb.Append('\n');
     }
 
@@ -168,96 +167,111 @@ public sealed class OpenXmlDocumentParser
         sb.Append(" |\n");
     }
 
-    private static string ExtractCellText(TableCell cell)
-    {
-        var parts = cell.Elements<Paragraph>()
-            .Select(p => ExtractParagraphText(p).Trim())
-            .Where(t => !string.IsNullOrEmpty(t));
-        return string.Join(" ", parts);
-    }
-
-    // ??????????????????????????????????????????????????????????????????????????
-    // Text extraction helpers
-    // ??????????????????????????????????????????????????????????????????????????
-
-    private static string ExtractParagraphText(Paragraph para)
+    private async Task<string> ExtractParagraphTextAsync(
+        DocumentFormat.OpenXml.Wordprocessing.Paragraph para,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
     {
         var sb = new StringBuilder();
 
-        foreach (var child in para.Elements<OpenXmlElement>())
+        foreach (var child in para.ChildElements)
         {
             switch (child)
             {
-                // Fix 2: OMML equation block — extract readable approximation
-                case OfficeMath oMath:
-                    AppendInlineMath(sb, oMath);
+                case DocumentFormat.OpenXml.Math.OfficeMath oMath:
+                    sb.Append(ExtractEquationText(oMath));
                     break;
-
-                case Run run:
-                    var sym = run.Elements<SymbolChar>().FirstOrDefault();
-                    if (sym is not null)
-                    {
-                        sb.Append(MapSymbol(sym));
-                        continue;
-                    }
-
-                    foreach (var t in run.Elements<Text>())
-                    {
-                        if (!string.IsNullOrEmpty(t.Text))
-                            sb.Append(t.Text);
-                    }
+                case DocumentFormat.OpenXml.Wordprocessing.Run run:
+                    await AppendRunContentAsync(sb, run, ridToImage);
                     break;
-
-                // Hyperlink text
                 case Hyperlink hyperlink:
-                    foreach (var run in hyperlink.Elements<Run>())
-                        foreach (var t in run.Elements<Text>())
-                            if (!string.IsNullOrEmpty(t.Text))
-                                sb.Append(t.Text);
+                    foreach (var innerRun in hyperlink.Elements<DocumentFormat.OpenXml.Wordprocessing.Run>())
+                        await AppendRunContentAsync(sb, innerRun, ridToImage);
                     break;
             }
         }
 
-        return sb.ToString();
+        return StripInlineCitations(sb.ToString());
     }
 
-    private static void AppendInlineMath(StringBuilder sb, OfficeMath oMath)
+    private async Task AppendRunContentAsync(
+        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Run run,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
     {
-        var math = ExtractEquationText(oMath);
-        if (string.IsNullOrWhiteSpace(math))
+        var sym = run.Elements<SymbolChar>().FirstOrDefault();
+        if (sym is not null)
+        {
+            sb.Append(MapSymbol(sym));
             return;
+        }
 
-        if (sb.Length > 0 && !char.IsWhiteSpace(sb[^1]))
-            sb.Append(' ');
-
-        sb.Append(math);
+        foreach (var child in run.ChildElements)
+        {
+            switch (child)
+            {
+                case DocumentFormat.OpenXml.Wordprocessing.Text t when !string.IsNullOrEmpty(t.Text):
+                    sb.Append(t.Text);
+                    break;
+                case DocumentFormat.OpenXml.Wordprocessing.Drawing drawing:
+                    sb.Append(await ResolveDrawingAsync(drawing, ridToImage));
+                    break;
+                case Picture pict:
+                    sb.Append(await ResolvePictureAsync(pict, ridToImage));
+                    break;
+            }
+        }
     }
 
-    // ??????????????????????????????????????????????????????????????????????????
-    // Fix 2: OMML equation ? plain text
-    // Walks <m:r><m:t> elements inside the equation block and concatenates
-    // the text tokens, separated by spaces to avoid "m=c+v" ? "m=c+v" (OK)
-    // but "E=mc²" ? "E=mc" losing the exponent. We preserve base text only.
-    // ??????????????????????????????????????????????????????????????????????????
-
-    private static string ExtractEquationText(OfficeMath oMath)
+    private async Task<string> ResolveDrawingAsync(
+        DocumentFormat.OpenXml.Wordprocessing.Drawing drawing,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
     {
-        // Collect all <m:t> (math text) elements in document order
+        foreach (var blip in drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>())
+        {
+            var rEmbed = blip.Embed?.Value;
+            if (!string.IsNullOrEmpty(rEmbed) && ridToImage.TryGetValue(rEmbed, out var img))
+                return await DescribeImageAsync(img.MimeType, img.Bytes);
+        }
+        return string.Empty;
+    }
+
+    private async Task<string> ResolvePictureAsync(
+        Picture pict,
+        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
+    {
+        foreach (var blip in pict.Descendants<DocumentFormat.OpenXml.Drawing.Blip>())
+        {
+            var rEmbed = blip.Embed?.Value;
+            if (!string.IsNullOrEmpty(rEmbed) && ridToImage.TryGetValue(rEmbed, out var img))
+                return await DescribeImageAsync(img.MimeType, img.Bytes);
+        }
+        return string.Empty;
+    }
+
+    private async Task<string> DescribeImageAsync(string mimeType, byte[] bytes)
+    {
+        var description = await _visionService.DescribeAsync(bytes, mimeType);
+        if (string.IsNullOrWhiteSpace(description))
+            return "[hình]";
+        return description.Length > 2 ? $"[{description.Trim('[', ']')}]" : description;
+    }
+
+    private static string ExtractEquationText(DocumentFormat.OpenXml.Math.OfficeMath oMath)
+    {
         var tokens = oMath
-            .Descendants<MathText>()
+            .Descendants<DocumentFormat.OpenXml.Math.Text>()
             .Select(t => t.Text ?? string.Empty)
             .Where(t => !string.IsNullOrWhiteSpace(t));
-
-        var result = string.Join(" ", tokens).Trim();
+        var result = string.Join("", tokens).Trim();
         return string.IsNullOrEmpty(result) ? string.Empty : $"[{result}]";
     }
 
-    private static int GetIndentLevel(Paragraph para)
+    private static string StripInlineCitations(string text) =>
+        Regex.Replace(text, @"(?<=[^\s\d.,;:!?])(\d{1,2})(?=[\s.,;:!?]|$)", string.Empty);
+
+    private static int GetIndentLevel(DocumentFormat.OpenXml.Wordprocessing.Paragraph para)
     {
         var numPr = para.ParagraphProperties?.NumberingProperties;
-        if (numPr is null)
-            return -1;
-
+        if (numPr is null) return -1;
         var ilvl = numPr.NumberingLevelReference?.Val?.Value;
         return ilvl.HasValue ? (int)ilvl.Value : 0;
     }
@@ -271,18 +285,12 @@ public sealed class OpenXmlDocumentParser
         _ => new string(' ', indent * 2) + "- "
     };
 
-    // ??????????????????????????????????????????????????????????????????????????
-    // Symbol font mapping
-    // ??????????????????????????????????????????????????????????????????????????
-
     private static string MapSymbol(SymbolChar sym)
     {
         var font = sym.Font?.Value ?? string.Empty;
         var ch = sym.Char?.Value?.ToUpperInvariant() ?? string.Empty;
-
         if (!string.Equals(font, "Symbol", StringComparison.OrdinalIgnoreCase))
             return string.Empty;
-
         return ch switch
         {
             "F06D" => "m",

@@ -13,8 +13,9 @@
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
       - GEMINI_API_KEY=AIzaSyD8FJHoheKZpwoki0xCIY_mkbboPzLrlu0
+      - GEMINI_KNOWLEDGE_API_KEY=AIzaSyDTRYVKF8up5YD09cZFRwMRxJloaUpc2mA
       - OLLAMA_BASE_URL=http://graphpaper.ollama:11434
-      - OLLAMA_MODEL=qwen2.5:14b
+      - OLLAMA_MODEL=llama3.1:8b
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
@@ -77,12 +78,12 @@
       - OLLAMA_HOST=http://graphpaper.ollama:11434
     entrypoint: >
       sh -c "
-        echo 'Checking if qwen2.5:14b is already pulled...';
-        if ollama list | grep -q 'qwen2.5:14b'; then
-          echo 'Model qwen2.5:14b already exists. Skipping pull.';
+        echo 'Checking if llama3.1:8b is already pulled...';
+        if ollama list | grep -q 'llama3.1:8b'; then
+          echo 'Model llama3.1:8b already exists. Skipping pull.';
         else
-          echo 'Pulling qwen2.5:14b (first time only, ~9GB)...';
-          ollama pull qwen2.5:14b;
+          echo 'Pulling llama3.1:8b (first time only)...';
+          ollama pull llama3.1:8b;
           echo 'Pull complete.';
         fi
       "

@@ -23,6 +23,16 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
     private const string DEFAULT_ENTITY_TYPE = "Khái niệm";
     private const string DEFAULT_RELATION_TYPE = "có_liên_hệ_với";
 
+    private static readonly HashSet<string> AllowedEntityTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Khái niệm", "Lý thuyết", "Định lý/Quy luật", "Mô hình", "Phương trình/Công thức",
+        "Cấu trúc dữ liệu", "Thuật toán", "Giao thức/Chuẩn", "Cấu trúc vật chất",
+        "Hệ thống/Kiến trúc", "Quá trình/Phản ứng", "Hiện tượng", "Cơ chế",
+        "Phương pháp", "Công cụ/Công nghệ", "Tổ chức/Thể chế", "Nhà khoa học/Tác giả",
+        "Địa danh", "Đại lượng/Đơn vị", "Chỉ số/Tham số",
+        "Môn học/Chương trình", "Công trình nghiên cứu",
+    };
+
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -168,7 +178,7 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
                 Id = Guid.NewGuid(),
                 ChunkId = chunkId,
                 Name = name,
-                EntityType = NormalizeWs(e.EntityType) is { Length: > 0 } t ? t : DEFAULT_ENTITY_TYPE,
+                EntityType = ValidateEntityType(NormalizeWs(e.EntityType)),
                 Description = NormalizeWs(e.Description)
             };
             lookup[name] = entity;
@@ -273,6 +283,13 @@ public sealed class OllamaKnowledgeExtractionService : IKnowledgeExtractionServi
             return string.Empty;
 
         return MultiSpaceRegex.Replace(value.Trim(), " ");
+    }
+
+    private static string ValidateEntityType(string? rawType)
+    {
+        if (string.IsNullOrWhiteSpace(rawType))
+            return DEFAULT_ENTITY_TYPE;
+        return AllowedEntityTypes.Contains(rawType) ? rawType : DEFAULT_ENTITY_TYPE;
     }
 
     private sealed class ExtractionSchema
