@@ -24,6 +24,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
+    private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Strips base64 image blocks, decodes HTML entities, and collapses excess whitespace.
     private static string CleanContent(string? text)
@@ -349,11 +350,8 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 yield break;
             }
 
-            // Search for a sentence boundary within [start, start+maxLength).
-            // Count must be exactly the window size so we never look before `start`.
-            var windowEnd  = start + maxLength;
-            var windowSize = windowEnd - start;           // == maxLength, but explicit
-            var breakPoint = text.LastIndexOfAny(['.', '!', '?', '\n'], windowEnd - 1, windowSize);
+            var windowEnd = start + maxLength;
+            var breakPoint = FindSafeSentenceBreak(text, start, windowEnd);
 
             var length = (breakPoint > start) ? breakPoint - start + 1 : maxLength;
             var slice  = text.Substring(start, length).Trim();
@@ -363,6 +361,32 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
             start += length;
         }
+    }
+
+    private static int FindSafeSentenceBreak(string text, int start, int windowEnd)
+    {
+        for (var i = windowEnd - 1; i > start; i--)
+        {
+            var ch = text[i];
+            if (ch != '.' && ch != '!' && ch != '?' && ch != '\n')
+                continue;
+
+            if (ch == '.')
+            {
+                var wordStart = i - 1;
+                while (wordStart > start && text[wordStart] != ' ' && text[wordStart] != '\n')
+                    wordStart--;
+
+                var word = text[(wordStart + 1)..(i + 1)];
+                if (word.Contains("://", StringComparison.Ordinal) ||
+                    word.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
+
+            return i;
+        }
+
+        return -1;
     }
 
     /// <summary>
@@ -592,11 +616,16 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (normalized.Length < 40)
             return false;
 
+        var lines = normalized.Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var lineCount = lines.Length;
+        var urlCount = UrlRegex.Matches(normalized).Count;
+        if (lineCount > 0 && urlCount >= 2 && (double)urlCount / lineCount >= 0.4)
+            return false;
+
         // Skip chunks where every non-empty line is a markdown heading.
         // Heading-only chunks carry no extractable knowledge — only noise entities
         // like "CHIÊM HỮU GIÁ TRỊ" extracted from a bare section title.
-        var lines = normalized.Split('\n',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (lines.All(l => l.StartsWith('#')))
             return false;
 

@@ -3,6 +3,8 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using System.Text;
 using System.Text.RegularExpressions;
+using OfficeMath = DocumentFormat.OpenXml.Math.OfficeMath;
+using MathText = DocumentFormat.OpenXml.Math.Text;
 
 namespace GraphPaper.Application.Services;
 
@@ -57,6 +59,10 @@ public sealed class OpenXmlDocumentParser
                     AppendParagraph(sb, para);
                     break;
 
+                case OfficeMath oMath:
+                    AppendMathBlock(sb, oMath);
+                    break;
+
                 case Table table:
                     AppendTable(sb, table);
                     break;
@@ -70,6 +76,18 @@ public sealed class OpenXmlDocumentParser
         // Fix 3: Strip standalone footnote marker lines (e.g. lone "1" left by
         // footnote reference runs that have no useful text content).
         return FootnoteMarkerRegex.Replace(raw, string.Empty).Trim();
+    }
+
+    private static void AppendMathBlock(StringBuilder sb, OfficeMath oMath)
+    {
+        var text = ExtractEquationText(oMath);
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        if (sb.Length > 0)
+            sb.Append('\n');
+
+        sb.Append(text).Append('\n');
     }
 
     // ??????????????????????????????????????????????????????????????????????????
@@ -171,8 +189,8 @@ public sealed class OpenXmlDocumentParser
             switch (child)
             {
                 // Fix 2: OMML equation block — extract readable approximation
-                case DocumentFormat.OpenXml.Math.OfficeMath oMath:
-                    sb.Append(ExtractEquationText(oMath));
+                case OfficeMath oMath:
+                    AppendInlineMath(sb, oMath);
                     break;
 
                 case Run run:
@@ -203,6 +221,18 @@ public sealed class OpenXmlDocumentParser
         return sb.ToString();
     }
 
+    private static void AppendInlineMath(StringBuilder sb, OfficeMath oMath)
+    {
+        var math = ExtractEquationText(oMath);
+        if (string.IsNullOrWhiteSpace(math))
+            return;
+
+        if (sb.Length > 0 && !char.IsWhiteSpace(sb[^1]))
+            sb.Append(' ');
+
+        sb.Append(math);
+    }
+
     // ??????????????????????????????????????????????????????????????????????????
     // Fix 2: OMML equation ? plain text
     // Walks <m:r><m:t> elements inside the equation block and concatenates
@@ -210,15 +240,15 @@ public sealed class OpenXmlDocumentParser
     // but "E=mc²" ? "E=mc" losing the exponent. We preserve base text only.
     // ??????????????????????????????????????????????????????????????????????????
 
-    private static string ExtractEquationText(DocumentFormat.OpenXml.Math.OfficeMath oMath)
+    private static string ExtractEquationText(OfficeMath oMath)
     {
         // Collect all <m:t> (math text) elements in document order
         var tokens = oMath
-            .Descendants<DocumentFormat.OpenXml.Math.Text>()
+            .Descendants<MathText>()
             .Select(t => t.Text ?? string.Empty)
             .Where(t => !string.IsNullOrWhiteSpace(t));
 
-        var result = string.Join("", tokens).Trim();
+        var result = string.Join(" ", tokens).Trim();
         return string.IsNullOrEmpty(result) ? string.Empty : $"[{result}]";
     }
 
