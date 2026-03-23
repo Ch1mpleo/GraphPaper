@@ -199,6 +199,10 @@ public static class IocContainer
         {
             client.Timeout = TimeSpan.FromMinutes(5);
         });
+        services.AddHttpClient("OllamaVision", client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(3);
+        });
         services.AddHttpClient("GroqKnowledge", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(5);

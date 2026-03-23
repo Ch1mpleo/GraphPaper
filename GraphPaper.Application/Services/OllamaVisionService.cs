@@ -63,7 +63,7 @@ public sealed class OllamaVisionService : IImageDescriptionService
 
     private async Task<string> CallOllamaAsync(byte[] imageBytes)
     {
-        using var client = _httpClientFactory.CreateClient("Ollama");
+        using var client = _httpClientFactory.CreateClient("OllamaVision");
         var url = $"{_baseUrl}/api/generate";
         var base64 = Convert.ToBase64String(imageBytes);
 
