@@ -42,6 +42,15 @@ services:
           ollama pull qwen2.5:14b;
           echo 'Pull complete.';
         fi
+
+        echo 'Checking if llama3.2-vision:11b is already pulled...';
+        if ollama list | grep -q 'llama3.2-vision:11b'; then
+          echo 'Model llama3.2-vision:11b already exists. Skipping pull.';
+        else
+          echo 'Pulling llama3.2-vision:11b (first time only)...';
+          ollama pull llama3.2-vision:11b;
+          echo 'Pull complete.';
+        fi
       "
     restart: "no"
 

@@ -11,9 +11,9 @@
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__DefaultConnection=Host=graphpaper.database;Port=5432;Database=graphpaper_db;Username=postgres;Password=postgres
       - GEMINI_API_KEY=AIzaSyD8FJHoheKZpwoki0xCIY_mkbboPzLrlu0
-      - GEMINI_KNOWLEDGE_API_KEY=AIzaSyDTRYVKF8up5YD09cZFRwMRxJloaUpc2mA
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=qwen2.5:14b
+      - OLLAMA_VISION_MODEL=llama3.2-vision:11b
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience
