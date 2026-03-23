@@ -13,7 +13,6 @@
       - GEMINI_API_KEY=AIzaSyCeF20VWDYwVk2ZbCmJ91Rl-IWJrSfJGiA
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=qwen2.5:14b
-      - OLLAMA_VISION_MODEL=llama3.2-vision:11b
       - JWT__SecretKey=GraphPaper_SECRETKEY_SIEUCAPBAOMAT_VAYMACHUADU16KYTU
       - JWT__Issuer=GraphPaper_Issuer
       - JWT__Audience=GraphPaper_Audience

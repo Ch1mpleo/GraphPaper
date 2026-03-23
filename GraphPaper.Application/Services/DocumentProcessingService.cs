@@ -14,15 +14,6 @@ namespace GraphPaper.Application.Services;
 
 public sealed class DocumentProcessingService : IDocumentProcessingService
 {
-    // Detects the START of a data-URI image (used for ShouldExtractKnowledge guard).
-    private static readonly Regex DataUriImageRegex = new(@"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    // Matches a COMPLETE inline markdown image whose src is a base64 data URI.
-    // Uses Singleline so '.' crosses newlines (some base64 strings wrap lines).
-    private static readonly Regex DataUriImageBlockRegex = new(
-        @"!\[[^\]]*\]\(data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/\r\n=]+\)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
     private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ReferenceSectionRegex = new(
@@ -34,17 +25,14 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         "references", "bibliography", "sources"
     ];
 
-    // Strips base64 image blocks, decodes HTML entities, and collapses excess whitespace.
+    // Decodes HTML entities and collapses excess whitespace.
     private static string CleanContent(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return string.Empty;
 
         // Decode HTML entities produced by Docling (e.g. &amp; → &, &lt; → <).
-        var decoded = System.Net.WebUtility.HtmlDecode(text);
-
-        // Remove the entire ![](...base64...) markdown image block.
-        var cleaned = DataUriImageBlockRegex.Replace(decoded, string.Empty);
+        var cleaned = System.Net.WebUtility.HtmlDecode(text);
 
         // Collapse 3+ consecutive newlines down to 2 (one blank line).
         cleaned = Regex.Replace(cleaned, @"\n{3,}", "\n\n");
@@ -58,7 +46,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             @"([^.\n!?])\n\n(?!#)([A-Za-z\u00c0-\u01ff])",
             "$1 $2");
 
-        // Remove Unicode replacement characters that can appear from image descriptions
+        // Remove Unicode replacement characters that can appear in parsed text.
         cleaned = cleaned.Replace("\uFFFD", string.Empty);
 
         return cleaned.Trim();
@@ -94,9 +82,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (userId == Guid.Empty)
             throw new ArgumentException("User id is required.", nameof(userId));
 
-        // FIX 1: Read the file to a byte[] exactly once.
-        // Previously: file stream was opened once in SaveDocumentRecordAsync (to write to disk)
-        // and then read a second time via CopyToAsync(memoryStream) here — two full reads.
         using var ms = new MemoryStream((int)file.Length);
         await file.CopyToAsync(ms);
         var fileBytes = ms.ToArray();
@@ -108,7 +93,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             document = await SaveDocumentRecordAsync(fileBytes, file.FileName, userId, unitOfWork);
         }
 
-        // Pass the already-buffered bytes to the background task — no second read.
         var filePayload = new FilePayload(fileBytes, file.FileName, file.ContentType);
 
         _ = Task.Run(async () =>
@@ -149,7 +133,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (document is null)
             return;
 
-        // FIX 2: Track the file path so we can clean it up on failure.
         var filePath = document.FilePath;
 
         try
@@ -203,7 +186,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             logger.LogError(ex, "Failed to process document {DocumentId}", documentId);
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Failed);
 
-            // FIX 2: Delete the orphaned file from disk when processing fails.
             if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
             {
                 try
@@ -249,7 +231,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
         foreach (var textItem in textItems)
         {
-            // Strip inline base64 images before checking content.
             var content = CleanContent(textItem.Text);
             if (string.IsNullOrWhiteSpace(content))
                 continue;
@@ -288,7 +269,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         if (string.IsNullOrWhiteSpace(markdownContent))
             return [];
 
-        // Clean: strip base64 images, decode HTML entities, collapse blank lines.
+        // Clean: decode HTML entities and collapse blank lines.
         var cleaned = CleanContent(markdownContent);
         if (string.IsNullOrWhiteSpace(cleaned))
             return [];
@@ -568,9 +549,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         IUnitOfWork unitOfWork,
         ILogger logger)
     {
-        // Delay is managed adaptively inside GroqKnowledgeExtractionService
-        // via x-ratelimit-remaining-tokens / x-ratelimit-reset-tokens headers.
-
         // In-memory dedup across all chunks of this document.
         // Prevents the overlap prefix from generating duplicate entities/relationships
         // that were already stored from the previous chunk's main content.
@@ -630,7 +608,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         }
     }
 
-
     private static bool ShouldExtractKnowledge(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -654,9 +631,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             return false;
 
         if (MarkdownOnlyRegex.IsMatch(normalized))
-            return false;
-
-        if (DataUriImageRegex.IsMatch(normalized))
             return false;
 
         var alphaNumericCount = normalized.Count(char.IsLetterOrDigit);
@@ -742,7 +716,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         await unitOfWork.SaveChangesAsync();
     }
 
-    // FIX 1: Accepts byte[] instead of opening the file stream a second time.
     private static async Task<Document> SaveDocumentRecordAsync(
         byte[] fileBytes,
         string fileName,
@@ -766,7 +739,6 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         return document;
     }
 
-    // FIX 1: Writes from the already-loaded byte[] — no stream re-read.
     private static async Task<string> SaveFileAsync(byte[] fileBytes, string fileName)
     {
         var uploadsDir = Path.Combine(Directory.GetCurrentDirectory(), "Uploads");

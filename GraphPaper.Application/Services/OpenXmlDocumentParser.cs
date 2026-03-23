@@ -2,7 +2,6 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Math;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using GraphPaper.Application.Interfaces;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -10,13 +9,10 @@ namespace GraphPaper.Application.Services;
 
 /// <summary>
 /// Parses DOCX files natively using DocumentFormat.OpenXml.
-/// Inline image formulas are described by IImageDescriptionService (Gemini Vision)
-/// with SHA-256 cache — duplicate images cost 0 extra API calls.
+/// Inline images are ignored.
 /// </summary>
 public sealed class OpenXmlDocumentParser
 {
-    private readonly IImageDescriptionService _visionService;
-
     private static readonly Regex FootnoteMarkerRegex =
         new(@"(?m)^\s*\d{1,3}\s*$", RegexOptions.Compiled);
 
@@ -29,12 +25,11 @@ public sealed class OpenXmlDocumentParser
             ["Heading4"] = ("#### ", 4),
         };
 
-    public OpenXmlDocumentParser(IImageDescriptionService visionService)
+    public OpenXmlDocumentParser()
     {
-        _visionService = visionService;
     }
 
-    public async Task<string> ParseToMarkdownAsync(byte[] fileBytes)
+    public Task<string> ParseToMarkdownAsync(byte[] fileBytes)
     {
         using var stream = new MemoryStream(fileBytes);
         using var wordDoc = WordprocessingDocument.Open(stream, isEditable: false);
@@ -45,7 +40,6 @@ public sealed class OpenXmlDocumentParser
         var body = mainPart.Document?.Body
             ?? throw new InvalidOperationException("Invalid DOCX: body not found.");
 
-        var ridToImage = BuildRidToImageMap(mainPart);
         var sb = new StringBuilder();
 
         foreach (var element in body.Elements<OpenXmlElement>())
@@ -53,10 +47,10 @@ public sealed class OpenXmlDocumentParser
             switch (element)
             {
                 case DocumentFormat.OpenXml.Wordprocessing.Paragraph para:
-                    await AppendParagraphAsync(sb, para, ridToImage);
+                    AppendParagraph(sb, para);
                     break;
                 case Table table:
-                    await AppendTableAsync(sb, table, ridToImage);
+                    AppendTable(sb, table);
                     break;
             }
         }
@@ -64,48 +58,14 @@ public sealed class OpenXmlDocumentParser
         var raw = sb.ToString().Trim();
         raw = FootnoteMarkerRegex.Replace(raw, string.Empty).Trim();
         raw = Regex.Replace(raw, @"\n{3,}", "\n\n");
-        return raw;
+        return Task.FromResult(raw);
     }
 
-    private static Dictionary<string, (string MimeType, byte[] Bytes)> BuildRidToImageMap(
-        MainDocumentPart mainPart)
-    {
-        var map = new Dictionary<string, (string, byte[])>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var rel in mainPart.Parts)
-        {
-            if (rel.OpenXmlPart is not ImagePart imagePart)
-                continue;
-            try
-            {
-                using var imgStream = imagePart.GetStream();
-                using var ms = new MemoryStream();
-                imgStream.CopyTo(ms);
-                var mimeType = imagePart.ContentType ?? InferMimeType(imagePart.Uri.ToString());
-                map[rel.RelationshipId] = (mimeType, ms.ToArray());
-            }
-            catch { }
-        }
-
-        return map;
-    }
-
-    private static string InferMimeType(string uri) =>
-        Path.GetExtension(uri).ToLowerInvariant() switch
-        {
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".bmp" => "image/bmp",
-            ".webp" => "image/webp",
-            _ => "image/png"
-        };
-
-    private async Task AppendParagraphAsync(
-        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Paragraph para,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
+    private static void AppendParagraph(
+        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Paragraph para)
     {
         var styleId = para.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "Normal";
-        var text = await ExtractParagraphTextAsync(para, ridToImage);
+        var text = ExtractParagraphText(para);
 
         if (string.IsNullOrWhiteSpace(text))
             return;
@@ -122,9 +82,8 @@ public sealed class OpenXmlDocumentParser
         }
     }
 
-    private async Task AppendTableAsync(
-        StringBuilder sb, Table table,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
+    private static void AppendTable(
+        StringBuilder sb, Table table)
     {
         var rows = table.Elements<TableRow>().ToList();
         if (rows.Count == 0) return;
@@ -140,7 +99,7 @@ public sealed class OpenXmlDocumentParser
                 var parts = new List<string>();
                 foreach (var p in cell.Elements<DocumentFormat.OpenXml.Wordprocessing.Paragraph>())
                 {
-                    var t = (await ExtractParagraphTextAsync(p, ridToImage)).Trim();
+                    var t = ExtractParagraphText(p).Trim();
                     if (!string.IsNullOrEmpty(t)) parts.Add(t);
                 }
                 cells.Add(string.Join(" ", parts));
@@ -167,9 +126,8 @@ public sealed class OpenXmlDocumentParser
         sb.Append(" |\n");
     }
 
-    private async Task<string> ExtractParagraphTextAsync(
-        DocumentFormat.OpenXml.Wordprocessing.Paragraph para,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
+    private static string ExtractParagraphText(
+        DocumentFormat.OpenXml.Wordprocessing.Paragraph para)
     {
         var sb = new StringBuilder();
 
@@ -181,11 +139,11 @@ public sealed class OpenXmlDocumentParser
                     sb.Append(ExtractEquationText(oMath));
                     break;
                 case DocumentFormat.OpenXml.Wordprocessing.Run run:
-                    await AppendRunContentAsync(sb, run, ridToImage);
+                    AppendRunContent(sb, run);
                     break;
                 case Hyperlink hyperlink:
                     foreach (var innerRun in hyperlink.Elements<DocumentFormat.OpenXml.Wordprocessing.Run>())
-                        await AppendRunContentAsync(sb, innerRun, ridToImage);
+                        AppendRunContent(sb, innerRun);
                     break;
             }
         }
@@ -193,9 +151,8 @@ public sealed class OpenXmlDocumentParser
         return StripInlineCitations(sb.ToString());
     }
 
-    private async Task AppendRunContentAsync(
-        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Run run,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
+    private static void AppendRunContent(
+        StringBuilder sb, DocumentFormat.OpenXml.Wordprocessing.Run run)
     {
         var sym = run.Elements<SymbolChar>().FirstOrDefault();
         if (sym is not null)
@@ -211,53 +168,11 @@ public sealed class OpenXmlDocumentParser
                 case DocumentFormat.OpenXml.Wordprocessing.Text t when !string.IsNullOrEmpty(t.Text):
                     sb.Append(t.Text);
                     break;
-                case DocumentFormat.OpenXml.Wordprocessing.Drawing drawing:
-                    sb.Append(await ResolveDrawingAsync(drawing, ridToImage));
-                    break;
-                case Picture pict:
-                    sb.Append(await ResolvePictureAsync(pict, ridToImage));
+                case DocumentFormat.OpenXml.Wordprocessing.Drawing:
+                case Picture:
                     break;
             }
         }
-    }
-
-    private async Task<string> ResolveDrawingAsync(
-        DocumentFormat.OpenXml.Wordprocessing.Drawing drawing,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
-    {
-        foreach (var blip in drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>())
-        {
-            var rEmbed = blip.Embed?.Value;
-            if (!string.IsNullOrEmpty(rEmbed) && ridToImage.TryGetValue(rEmbed, out var img))
-                return await DescribeImageAsync(img.MimeType, img.Bytes);
-        }
-        return string.Empty;
-    }
-
-    private async Task<string> ResolvePictureAsync(
-        Picture pict,
-        Dictionary<string, (string MimeType, byte[] Bytes)> ridToImage)
-    {
-        foreach (var blip in pict.Descendants<DocumentFormat.OpenXml.Drawing.Blip>())
-        {
-            var rEmbed = blip.Embed?.Value;
-            if (!string.IsNullOrEmpty(rEmbed) && ridToImage.TryGetValue(rEmbed, out var img))
-                return await DescribeImageAsync(img.MimeType, img.Bytes);
-        }
-        return string.Empty;
-    }
-
-    private async Task<string> DescribeImageAsync(string mimeType, byte[] bytes)
-    {
-        var description = await _visionService.DescribeAsync(bytes, mimeType);
-
-        description = description
-            .Replace("\uFFFD", string.Empty)
-            .Trim();
-
-        if (string.IsNullOrWhiteSpace(description))
-            return "[hình]";
-        return description.Length > 2 ? $"[{description.Trim('[', ']')}]" : description;
     }
 
     private static string ExtractEquationText(DocumentFormat.OpenXml.Math.OfficeMath oMath)

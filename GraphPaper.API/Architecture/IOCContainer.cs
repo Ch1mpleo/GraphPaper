@@ -165,7 +165,6 @@ public static class IocContainer
                            ?? throw new InvalidOperationException("Gemini API Key is missing.");
         var ollamaBaseUrl = configuration["OLLAMA_BASE_URL"] ?? "http://host.docker.internal:11434";
         var ollamaModel = configuration["OLLAMA_MODEL"] ?? "llama3.1:8b";
-        var ollamaVisionModel = configuration["OLLAMA_VISION_MODEL"] ?? "llama3.2-vision:11b";
 
         // Bind DocumentProcessingOptions from appsettings.json section
         services.Configure<DocumentProcessingOptions>(
@@ -183,25 +182,11 @@ public static class IocContainer
             client.Timeout = TimeSpan.FromMinutes(2);
         });
 
-        services.AddSingleton<IImageDescriptionService>(sp =>
-        {
-            var factory = sp.GetRequiredService<IHttpClientFactory>();
-            return new OllamaVisionService(factory, ollamaBaseUrl, ollamaVisionModel);
-        });
-
-        services.AddSingleton<OpenXmlDocumentParser>(sp =>
-        {
-            var vision = sp.GetRequiredService<IImageDescriptionService>();
-            return new OpenXmlDocumentParser(vision);
-        });
+        services.AddSingleton<OpenXmlDocumentParser>();
 
         services.AddHttpClient("Ollama", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(5);
-        });
-        services.AddHttpClient("OllamaVision", client =>
-        {
-            client.Timeout = TimeSpan.FromMinutes(3);
         });
         services.AddHttpClient("GroqKnowledge", client =>
         {
