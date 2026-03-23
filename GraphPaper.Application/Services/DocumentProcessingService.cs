@@ -25,6 +25,9 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
     private static readonly Regex MarkdownOnlyRegex = new(@"^[#>*_`\-\s]+$", RegexOptions.Compiled);
     private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ReferenceSectionRegex = new(
+        @"(?=^#{1,4}\s*(tài liệu tham khảo|nguồn trích dẫn|references|bibliography|sources)\b)",
+        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
     private static readonly string[] ReferenceHeadingKeywords =
     [
         "tài liệu tham khảo", "nguồn trích dẫn",
@@ -52,7 +55,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         // Characters range \u00c0-\u01ff covers both upper- and lowercase Latin/Vietnamese.
         cleaned = Regex.Replace(
             cleaned,
-            @"([^.\n!?])\n\n([A-Za-z\u00c0-\u01ff])",
+            @"([^.\n!?])\n\n(?!#)([A-Za-z\u00c0-\u01ff])",
             "$1 $2");
 
         // Remove Unicode replacement characters that can appear from image descriptions
@@ -289,6 +292,10 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         var cleaned = CleanContent(markdownContent);
         if (string.IsNullOrWhiteSpace(cleaned))
             return [];
+
+        // Strip references section before splitting to prevent URL ratio
+        // contamination of adjacent sections.
+        cleaned = StripReferenceSection(cleaned);
 
         // ── Step 1: split by heading (##/###) to get semantically scoped sections ──
         // Each section string still starts with its heading text.
@@ -695,7 +702,22 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             l.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             l.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
 
-        return (double)urlCount / lines.Length >= 0.5;
+        var urlRatio = (double)urlCount / lines.Length;
+
+        return lines.Length <= 10
+            ? urlRatio >= 0.5
+            : urlRatio >= 0.7;
+    }
+
+    /// <summary>
+    /// Strips the reference/bibliography section from the end of the markdown content
+    /// before chunking, preventing URLs in the reference list from inflating the
+    /// URL ratio of adjacent content sections and causing them to be filtered out.
+    /// </summary>
+    private static string StripReferenceSection(string content)
+    {
+        var match = ReferenceSectionRegex.Match(content);
+        return match.Success ? content[..match.Index].TrimEnd() : content;
     }
 
     private static string NormalizeEntityKey(string name)
