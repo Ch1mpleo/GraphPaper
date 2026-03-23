@@ -102,6 +102,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             var doclingClient = scope.ServiceProvider.GetRequiredService<IDoclingClient>();
             var embeddingService = scope.ServiceProvider.GetRequiredService<IEmbeddingService>();
             var knowledgeExtractionService = scope.ServiceProvider.GetRequiredService<IKnowledgeExtractionService>();
+            var mindmapService = scope.ServiceProvider.GetRequiredService<IMindmapService>();
 
             await ProcessDocumentAsync(
                 document.Id,
@@ -111,6 +112,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 _openXmlParser,
                 embeddingService,
                 knowledgeExtractionService,
+                mindmapService,
                 _options,
                 _logger);
         });
@@ -126,6 +128,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         OpenXmlDocumentParser openXmlParser,
         IEmbeddingService embeddingService,
         IKnowledgeExtractionService knowledgeExtractionService,
+        IMindmapService mindmapService,
         DocumentProcessingOptions options,
         ILogger logger)
     {
@@ -180,6 +183,16 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
 
             await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);
+
+            try
+            {
+                await mindmapService.GenerateAndSaveAsync(document.Id);
+                logger.LogInformation("Mindmap generated for document {DocumentId}", document.Id);
+            }
+            catch (Exception mindmapEx)
+            {
+                logger.LogWarning(mindmapEx, "Mindmap generation failed for document {DocumentId}. Document is still Ready.", document.Id);
+            }
         }
         catch (Exception ex)
         {

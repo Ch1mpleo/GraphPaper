@@ -13,5 +13,6 @@ namespace GraphPaper.Domain.Entities
         public User User { get; set; } = null!;
         public ICollection<DocumentChunk> Chunks { get; set; } = new List<DocumentChunk>();
         public ICollection<ChatSession> ChatSessions { get; set; } = new List<ChatSession>();
+        public DocumentMindmap? Mindmap { get; set; }
     }
 }

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GraphPaper UI - Upload</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+<header>
+    <nav>
+        <a href="/ui/auth">Auth</a>
+        <a href="/ui/upload">Upload + Auto Mindmap</a>
+        <a href="/ui/documents">Documents API</a>
+        <a href="/ui/mindmap">Mindmap API</a>
+    </nav>
+</header>
+
+<main>
+    <h1>Upload (.pdf/.docx) and Auto Show Mindmap</h1>
+
+    <section class="card">
+        <input id="fileInput" type="file" accept=".pdf,.docx" />
+        <button class="primary" id="uploadBtn">Upload</button>
+        <p id="uploadStatus" class="status"></p>
+        <p id="documentInfo" class="status"></p>
+    </section>
+
+    <section class="card">
+        <h2>Mindmap</h2>
+        <div id="mindmapRender"></div>
+    </section>
+
+    <section class="card">
+        <h2>Latest API payload</h2>
+        <pre id="rawResponse"></pre>
+    </section>
+</main>
+
+<script src="/ui/app.js"></script>
+<script>
+    const ui = window.GraphPaperUi;
+
+    async function waitForMindmap(documentId) {
+        for (let i = 0; i < 60; i++) {
+            try {
+                const payload = await ui.apiFetch(`/api/document/${documentId}/mindmap`);
+                const data = ui.unwrapData(payload);
+                document.getElementById("rawResponse").textContent = JSON.stringify(payload, null, 2);
+                await ui.renderMermaid("mindmapRender", data.mermaidCode);
+                ui.setStatus("uploadStatus", "Mindmap loaded.");
+                return;
+            } catch (error) {
+                if (i === 59) {
+                    throw error;
+                }
+
+                ui.setStatus("uploadStatus", `Waiting for mindmap generation... (${i + 1}/60)`);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+        }
+    }
+
+    document.getElementById("uploadBtn").addEventListener("click", async () => {
+        try {
+            const file = document.getElementById("fileInput").files[0];
+            if (!file) {
+                throw new Error("Please choose a .pdf or .docx file.");
+            }
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            ui.setStatus("uploadStatus", "Uploading file...");
+            const result = await ui.apiFetch("/api/document/upload", {
+                method: "POST",
+                body: formData
+            });
+
+            const documentId = ui.unwrapData(result);
+            document.getElementById("documentInfo").textContent = `Document ID: ${documentId}`;
+            document.getElementById("rawResponse").textContent = JSON.stringify(result, null, 2);
+
+            await waitForMindmap(documentId);
+        } catch (error) {
+            ui.setStatus("uploadStatus", error.message, true);
+        }
+    });
+</script>
+</body>
+</html>

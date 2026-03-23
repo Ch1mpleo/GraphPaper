@@ -14,6 +14,7 @@ public class UnitOfWork : IUnitOfWork
         IGenericRepository<DocumentChunk> documentChunks,
         IGenericRepository<ExtractedEntity> extractedEntities,
         IGenericRepository<ExtractedRelationship> extractedRelationships,
+        IGenericRepository<DocumentMindmap> documentMindmaps,
         IGenericRepository<ChatSession> chatSessions,
         IGenericRepository<ChatMessage> chatMessages,
         IGenericRepository<MessageCitation> messageCitations)
@@ -24,6 +25,7 @@ public class UnitOfWork : IUnitOfWork
         DocumentChunks = documentChunks;
         ExtractedEntities = extractedEntities;
         ExtractedRelationships = extractedRelationships;
+        DocumentMindmaps = documentMindmaps;
         ChatSessions = chatSessions;
         ChatMessages = chatMessages;
         MessageCitations = messageCitations;
@@ -34,6 +36,7 @@ public class UnitOfWork : IUnitOfWork
     public IGenericRepository<DocumentChunk> DocumentChunks { get; }
     public IGenericRepository<ExtractedEntity> ExtractedEntities { get; }
     public IGenericRepository<ExtractedRelationship> ExtractedRelationships { get; }
+    public IGenericRepository<DocumentMindmap> DocumentMindmaps { get; }
     public IGenericRepository<ChatSession> ChatSessions { get; }
     public IGenericRepository<ChatMessage> ChatMessages { get; }
     public IGenericRepository<MessageCitation> MessageCitations { get; }

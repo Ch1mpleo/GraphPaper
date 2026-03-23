@@ -17,6 +17,7 @@ namespace GraphPaper.Domain
         public DbSet<DocumentChunk> DocumentChunks { get; set; }
         public DbSet<ExtractedEntity> ExtractedEntities { get; set; }
         public DbSet<ExtractedRelationship> ExtractedRelationships { get; set; }
+        public DbSet<DocumentMindmap> DocumentMindmaps { get; set; }
         public DbSet<ChatSession> ChatSessions { get; set; }
         public DbSet<ChatMessage> ChatMessages { get; set; }
         public DbSet<MessageCitation> MessageCitations { get; set; }
@@ -57,6 +58,17 @@ namespace GraphPaper.Domain
                       .WithMany()
                       .HasForeignKey(c => c.ChunkId)
                       .OnDelete(DeleteBehavior.Restrict); // Don't delete chunks just because a chat is deleted
+            });
+
+            modelBuilder.Entity<DocumentMindmap>(entity =>
+            {
+                entity.HasIndex(m => m.DocumentId)
+                    .IsUnique();
+
+                entity.HasOne(m => m.Document)
+                    .WithOne(d => d.Mindmap)
+                    .HasForeignKey<DocumentMindmap>(m => m.DocumentId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

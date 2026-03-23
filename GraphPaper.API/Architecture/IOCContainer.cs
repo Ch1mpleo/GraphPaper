@@ -65,6 +65,7 @@ public static class IocContainer
 
         services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
         services.AddScoped<IDocumentReviewService, DocumentReviewService>();
+        services.AddScoped<IMindmapService, MindmapService>();
         services.AddScoped<IAuthService, AuthService>();
 
         services.AddHttpContextAccessor();

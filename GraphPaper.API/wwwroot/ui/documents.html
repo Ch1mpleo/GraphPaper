@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GraphPaper UI - Documents API</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+<header>
+    <nav>
+        <a href="/ui/auth">Auth</a>
+        <a href="/ui/upload">Upload + Auto Mindmap</a>
+        <a href="/ui/documents">Documents API</a>
+        <a href="/ui/mindmap">Mindmap API</a>
+    </nav>
+</header>
+
+<main>
+    <h1>Document APIs</h1>
+
+    <section class="card">
+        <div class="row">
+            <input id="pageNumber" type="number" min="1" value="1" placeholder="Page number" />
+            <input id="pageSize" type="number" min="1" value="10" placeholder="Page size" />
+            <button class="primary" id="listBtn">Get My Documents</button>
+        </div>
+        <p id="listStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+        <div class="row">
+            <input id="detailDocumentId" placeholder="Document ID" />
+            <button class="primary" id="detailBtn">Get Document Detail</button>
+        </div>
+        <p id="detailStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+        <h2>Response</h2>
+        <pre id="responseView"></pre>
+    </section>
+</main>
+
+<script src="/ui/app.js"></script>
+<script>
+    const ui = window.GraphPaperUi;
+
+    document.getElementById("listBtn").addEventListener("click", async () => {
+        try {
+            const pageNumber = document.getElementById("pageNumber").value || "1";
+            const pageSize = document.getElementById("pageSize").value || "10";
+            const path = `/api/document?pageNumber=${encodeURIComponent(pageNumber)}&pageSize=${encodeURIComponent(pageSize)}`;
+            const result = await ui.apiFetch(path);
+
+            document.getElementById("responseView").textContent = JSON.stringify(result, null, 2);
+            ui.setStatus("listStatus", "Documents loaded.");
+        } catch (error) {
+            ui.setStatus("listStatus", error.message, true);
+        }
+    });
+
+    document.getElementById("detailBtn").addEventListener("click", async () => {
+        try {
+            const documentId = document.getElementById("detailDocumentId").value.trim();
+            if (!documentId) {
+                throw new Error("Document ID is required.");
+            }
+
+            const result = await ui.apiFetch(`/api/document/${documentId}`);
+            document.getElementById("responseView").textContent = JSON.stringify(result, null, 2);
+            ui.setStatus("detailStatus", "Document detail loaded.");
+        } catch (error) {
+            ui.setStatus("detailStatus", error.message, true);
+        }
+    });
+</script>
+</body>
+</html>

@@ -85,6 +85,7 @@ app.UseExceptionHandler(errorApp =>
 //}
 
 app.UseCors("AllowFrontend");
+app.UseStaticFiles();
 
 // Configure the HTTP request pipeline - REMEMBER
 if (app.Environment.IsDevelopment() || app.Environment.IsProduction())

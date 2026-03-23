@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GraphPaper UI - Mindmap API</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+<header>
+    <nav>
+        <a href="/ui/auth">Auth</a>
+        <a href="/ui/upload">Upload + Auto Mindmap</a>
+        <a href="/ui/documents">Documents API</a>
+        <a href="/ui/mindmap">Mindmap API</a>
+    </nav>
+</header>
+
+<main>
+    <h1>Mindmap API</h1>
+
+    <section class="card">
+        <div class="row">
+            <input id="mindmapDocumentId" placeholder="Document ID" />
+            <button class="primary" id="getMindmapBtn">GET Mindmap</button>
+            <button id="regenMindmapBtn">POST Regenerate</button>
+        </div>
+        <p id="mindmapStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+        <h2>Rendered Mindmap</h2>
+        <div id="mindmapRender"></div>
+    </section>
+
+    <section class="card">
+        <h2>Raw Response</h2>
+        <pre id="mindmapResponse"></pre>
+    </section>
+</main>
+
+<script src="/ui/app.js"></script>
+<script>
+    const ui = window.GraphPaperUi;
+
+    async function loadMindmap(documentId, method) {
+        const route = `/api/document/${documentId}/mindmap${method === "POST" ? "/regenerate" : ""}`;
+        const payload = await ui.apiFetch(route, { method });
+        const data = ui.unwrapData(payload);
+
+        document.getElementById("mindmapResponse").textContent = JSON.stringify(payload, null, 2);
+        await ui.renderMermaid("mindmapRender", data.mermaidCode);
+    }
+
+    document.getElementById("getMindmapBtn").addEventListener("click", async () => {
+        try {
+            const documentId = document.getElementById("mindmapDocumentId").value.trim();
+            if (!documentId) {
+                throw new Error("Document ID is required.");
+            }
+
+            await loadMindmap(documentId, "GET");
+            ui.setStatus("mindmapStatus", "Mindmap loaded.");
+        } catch (error) {
+            ui.setStatus("mindmapStatus", error.message, true);
+        }
+    });
+
+    document.getElementById("regenMindmapBtn").addEventListener("click", async () => {
+        try {
+            const documentId = document.getElementById("mindmapDocumentId").value.trim();
+            if (!documentId) {
+                throw new Error("Document ID is required.");
+            }
+
+            await loadMindmap(documentId, "POST");
+            ui.setStatus("mindmapStatus", "Mindmap regenerated and loaded.");
+        } catch (error) {
+            ui.setStatus("mindmapStatus", error.message, true);
+        }
+    });
+</script>
+</body>
+</html>

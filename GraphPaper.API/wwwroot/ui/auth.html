@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GraphPaper UI - Auth</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+<header>
+    <nav>
+        <a href="/ui/auth">Auth</a>
+        <a href="/ui/upload">Upload + Auto Mindmap</a>
+        <a href="/ui/documents">Documents API</a>
+        <a href="/ui/mindmap">Mindmap API</a>
+    </nav>
+</header>
+
+<main>
+    <h1>Register / Login</h1>
+
+    <div class="grid-2">
+        <section class="card">
+            <h2>Register</h2>
+            <div class="row">
+                <input id="registerUsername" placeholder="Username" />
+                <input id="registerEmail" placeholder="Email" type="email" />
+                <input id="registerPassword" placeholder="Password" type="password" />
+                <button class="primary" id="registerBtn">Register</button>
+            </div>
+            <p id="registerStatus" class="status"></p>
+        </section>
+
+        <section class="card">
+            <h2>Login</h2>
+            <div class="row">
+                <input id="loginEmail" placeholder="Email" type="email" />
+                <input id="loginPassword" placeholder="Password" type="password" />
+                <button class="primary" id="loginBtn">Login</button>
+                <button id="logoutBtn">Clear Token</button>
+            </div>
+            <p id="loginStatus" class="status"></p>
+        </section>
+    </div>
+
+    <section class="card">
+        <h2>Current JWT</h2>
+        <pre id="tokenView"></pre>
+    </section>
+</main>
+
+<script src="/ui/app.js"></script>
+<script>
+    const ui = window.GraphPaperUi;
+
+    function refreshTokenView() {
+        document.getElementById("tokenView").textContent = ui.getToken() || "(empty)";
+    }
+
+    document.getElementById("registerBtn").addEventListener("click", async () => {
+        try {
+            const payload = {
+                username: document.getElementById("registerUsername").value,
+                email: document.getElementById("registerEmail").value,
+                password: document.getElementById("registerPassword").value
+            };
+
+            const result = await ui.apiFetch("/api/auth/register", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+
+            ui.setStatus("registerStatus", result?.value?.message || "Registered.");
+        } catch (error) {
+            ui.setStatus("registerStatus", error.message, true);
+        }
+    });
+
+    document.getElementById("loginBtn").addEventListener("click", async () => {
+        try {
+            const payload = {
+                email: document.getElementById("loginEmail").value,
+                password: document.getElementById("loginPassword").value
+            };
+
+            const result = await ui.apiFetch("/api/auth/login", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+
+            const data = ui.unwrapData(result);
+            if (!data?.accessToken) {
+                throw new Error("Access token not found in response.");
+            }
+
+            ui.setToken(data.accessToken);
+            refreshTokenView();
+            ui.setStatus("loginStatus", "Login successful.");
+        } catch (error) {
+            ui.setStatus("loginStatus", error.message, true);
+        }
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+        ui.clearToken();
+        refreshTokenView();
+        ui.setStatus("loginStatus", "Token cleared.");
+    });
+
+    refreshTokenView();
+</script>
+</body>
+</html>
