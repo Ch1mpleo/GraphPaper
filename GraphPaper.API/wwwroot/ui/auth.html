@@ -43,19 +43,11 @@
         </section>
     </div>
 
-    <section class="card">
-        <h2>Current JWT</h2>
-        <pre id="tokenView"></pre>
-    </section>
 </main>
 
 <script src="/ui/app.js"></script>
 <script>
     const ui = window.GraphPaperUi;
-
-    function refreshTokenView() {
-        document.getElementById("tokenView").textContent = ui.getToken() || "(empty)";
-    }
 
     document.getElementById("registerBtn").addEventListener("click", async () => {
         try {
@@ -94,7 +86,6 @@
             }
 
             ui.setToken(data.accessToken);
-            refreshTokenView();
             ui.setStatus("loginStatus", "Login successful.");
         } catch (error) {
             ui.setStatus("loginStatus", error.message, true);
@@ -103,11 +94,8 @@
 
     document.getElementById("logoutBtn").addEventListener("click", () => {
         ui.clearToken();
-        refreshTokenView();
         ui.setStatus("loginStatus", "Token cleared.");
     });
-
-    refreshTokenView();
 </script>
 </body>
 </html>

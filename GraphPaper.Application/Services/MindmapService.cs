@@ -1,4 +1,5 @@
 using GraphPaper.Application.Interfaces;
+using GraphPaper.Application.DTOs.MindmapDTO;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -195,5 +196,25 @@ public sealed class MindmapService : IMindmapService
             var style = palette[i % palette.Length];
             sb.AppendLine($"    classDef {typeNames[i]} {style}");
         }
+    }
+
+    public async Task<Dictionary<string, MindmapEntityDto>> BuildEntityIndexAsync(Guid documentId)
+    {
+        var entities = await _unitOfWork.ExtractedEntities
+            .GetQueryable()
+            .Where(e => !e.IsDeleted && e.Chunk.DocumentId == documentId)
+            .Select(e => new { e.Id, e.Name, e.EntityType, e.Description })
+            .Take(MAX_NODES)
+            .ToListAsync();
+
+        return entities.ToDictionary(
+            e => "N" + NonAlphanumRegex.Replace(e.Id.ToString("N"), ""),
+            e => new MindmapEntityDto
+            {
+                Id = e.Id,
+                Name = e.Name,
+                EntityType = e.EntityType,
+                Description = e.Description
+            });
     }
 }

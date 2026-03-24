@@ -10,7 +10,7 @@ namespace GraphPaper.API.Controllers;
 [ApiController]
 [Route("api/document/{documentId:guid}/mindmap")]
 [Authorize]
-public class MindmapController : ControllerBase
+public sealed class MindmapController : ControllerBase
 {
     private readonly IMindmapService _mindmapService;
 
@@ -19,55 +19,42 @@ public class MindmapController : ControllerBase
         _mindmapService = mindmapService;
     }
 
-    /// <summary>
-    /// Get the Mermaid mindmap for a document.
-    /// </summary>
     [HttpGet]
-    [SwaggerOperation(
-        Summary = "Get document mindmap",
-        Description = "Returns the stored Mermaid graph code for the document's knowledge graph. Returns 404 if the mindmap has not been generated yet.")]
+    [SwaggerOperation(Summary = "Get document mindmap")]
     [ProducesResponseType(typeof(ApiResult<MindmapDto>), 200)]
     [ProducesResponseType(typeof(ApiResult), 404)]
     public async Task<IActionResult> GetMindmap(Guid documentId)
     {
         var mindmap = await _mindmapService.GetByDocumentIdAsync(documentId);
-
         if (mindmap is null)
-            return NotFound(ApiResult.Failure("404", "Mindmap not found. The document may still be processing."));
+            return NotFound(ApiResult.Failure("404", "Mindmap not found."));
 
-        return Ok(ApiResult<MindmapDto>.Success(new MindmapDto
-        {
-            Id = mindmap.Id,
-            DocumentId = mindmap.DocumentId,
-            MermaidCode = mindmap.MermaidCode,
-            NodeCount = mindmap.NodeCount,
-            EdgeCount = mindmap.EdgeCount,
-            CreatedAt = mindmap.CreatedAt,
-            UpdatedAt = mindmap.UpdatedAt
-        }));
+        var entityIndex = await _mindmapService.BuildEntityIndexAsync(documentId);
+        return Ok(ApiResult<MindmapDto>.Success(ToDto(mindmap, entityIndex)));
     }
 
-    /// <summary>
-    /// Regenerate the mindmap for a document.
-    /// </summary>
     [HttpPost("regenerate")]
-    [SwaggerOperation(
-        Summary = "Regenerate document mindmap",
-        Description = "Forces a fresh Mermaid mindmap to be built from the current state of the document's knowledge graph.")]
+    [SwaggerOperation(Summary = "Regenerate document mindmap")]
     [ProducesResponseType(typeof(ApiResult<MindmapDto>), 200)]
     public async Task<IActionResult> RegenerateMindmap(Guid documentId)
     {
         var mindmap = await _mindmapService.GenerateAndSaveAsync(documentId);
-
-        return Ok(ApiResult<MindmapDto>.Success(new MindmapDto
-        {
-            Id = mindmap.Id,
-            DocumentId = mindmap.DocumentId,
-            MermaidCode = mindmap.MermaidCode,
-            NodeCount = mindmap.NodeCount,
-            EdgeCount = mindmap.EdgeCount,
-            CreatedAt = mindmap.CreatedAt,
-            UpdatedAt = mindmap.UpdatedAt
-        }, "200", "Mindmap regenerated successfully."));
+        var entityIndex = await _mindmapService.BuildEntityIndexAsync(documentId);
+        return Ok(ApiResult<MindmapDto>.Success(
+            ToDto(mindmap, entityIndex), "200", "Mindmap regenerated successfully."));
     }
+
+    private static MindmapDto ToDto(
+        Domain.Entities.DocumentMindmap mindmap,
+        Dictionary<string, MindmapEntityDto> entityIndex) => new()
+    {
+        Id = mindmap.Id,
+        DocumentId = mindmap.DocumentId,
+        MermaidCode = mindmap.MermaidCode,
+        NodeCount = mindmap.NodeCount,
+        EdgeCount = mindmap.EdgeCount,
+        CreatedAt = mindmap.CreatedAt,
+        UpdatedAt = mindmap.UpdatedAt,
+        EntityIndex = entityIndex
+    };
 }

@@ -111,3 +111,68 @@ pre {
 .error {
     color: #ff8c8c;
 }
+
+/* ── Entity detail panel ──────────────────────────────────────────── */
+#entityPanel {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+#entityPanelInner {
+    background: #1c2030;
+    border: 1px solid #2b3240;
+    border-radius: 10px;
+    padding: 28px 32px;
+    width: min(480px, 92vw);
+    position: relative;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+#entityPanelInner h2 {
+    margin: 0 0 6px;
+    font-size: 1.15rem;
+    color: #9ed0ff;
+    word-break: break-word;
+}
+
+#panelTypeBadge {
+    display: inline-block;
+    background: #1f6feb22;
+    border: 1px solid #1f6feb66;
+    color: #9ed0ff;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin-bottom: 14px;
+}
+
+#panelDescription {
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: #c7d2e3;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 260px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+#panelClose {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    background: transparent;
+    border: none;
+    color: #7a8ea0;
+    font-size: 1.3rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 4px 8px;
+}
+
+#panelClose:hover { color: #e8ecf1; }

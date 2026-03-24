@@ -48,7 +48,12 @@
                 const payload = await ui.apiFetch(`/api/document/${documentId}/mindmap`);
                 const data = ui.unwrapData(payload);
                 document.getElementById("rawResponse").textContent = JSON.stringify(payload, null, 2);
-                await ui.renderMermaid("mindmapRender", data.mermaidCode);
+                await ui.renderMermaid(
+                    "mindmapRender",
+                    data.mermaidCode,
+                    data.entityIndex ?? {},
+                    ui.showEntityPanel
+                );
                 ui.setStatus("uploadStatus", "Mindmap loaded.");
                 return;
             } catch (error) {
@@ -87,6 +92,27 @@
             ui.setStatus("uploadStatus", error.message, true);
         }
     });
+
+    document.getElementById("panelClose")
+        .addEventListener("click", ui.hideEntityPanel);
+
+    document.getElementById("entityPanel")
+        .addEventListener("click", e => {
+            if (e.target === document.getElementById("entityPanel"))
+                ui.hideEntityPanel();
+        });
+
+    document.addEventListener("keydown", e => {
+        if (e.key === "Escape") ui.hideEntityPanel();
+    });
 </script>
+<div id="entityPanel">
+    <div id="entityPanelInner">
+        <button id="panelClose" title="Close">✕</button>
+        <h2 id="panelName"></h2>
+        <span id="panelTypeBadge"><span id="panelType"></span></span>
+        <p id="panelDescription"></p>
+    </div>
+</div>
 </body>
 </html>

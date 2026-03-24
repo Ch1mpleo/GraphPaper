@@ -8,6 +8,12 @@ namespace GraphPaper.API.Controllers;
 [Route("ui")]
 public sealed class UiController : Controller
 {
+    [HttpGet("/")]
+    public IActionResult Root()
+    {
+        return Redirect("/ui/auth.html");
+    }
+
     [HttpGet("")]
     public IActionResult Index()
     {

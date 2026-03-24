@@ -40,6 +40,15 @@
     </section>
 </main>
 
+<div id="entityPanel">
+    <div id="entityPanelInner">
+        <button id="panelClose" title="Close">✕</button>
+        <h2 id="panelName"></h2>
+        <span id="panelTypeBadge"><span id="panelType"></span></span>
+        <p id="panelDescription"></p>
+    </div>
+</div>
+
 <script src="/ui/app.js"></script>
 <script>
     const ui = window.GraphPaperUi;
@@ -50,7 +59,12 @@
         const data = ui.unwrapData(payload);
 
         document.getElementById("mindmapResponse").textContent = JSON.stringify(payload, null, 2);
-        await ui.renderMermaid("mindmapRender", data.mermaidCode);
+        await ui.renderMermaid(
+            "mindmapRender",
+            data.mermaidCode,
+            data.entityIndex ?? {},
+            ui.showEntityPanel
+        );
     }
 
     document.getElementById("getMindmapBtn").addEventListener("click", async () => {
@@ -79,6 +93,19 @@
         } catch (error) {
             ui.setStatus("mindmapStatus", error.message, true);
         }
+    });
+
+    document.getElementById("panelClose")
+        .addEventListener("click", ui.hideEntityPanel);
+
+    document.getElementById("entityPanel")
+        .addEventListener("click", e => {
+            if (e.target === document.getElementById("entityPanel"))
+                ui.hideEntityPanel();
+        });
+
+    document.addEventListener("keydown", e => {
+        if (e.key === "Escape") ui.hideEntityPanel();
     });
 </script>
 </body>
