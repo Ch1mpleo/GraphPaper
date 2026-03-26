@@ -1,5 +1,5 @@
-using GraphPaper.Application.Interfaces;
 using GraphPaper.Application.DTOs.DoclingDTO;
+using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Domain.Enums;
 using GraphPaper.Infrastructure.Interfaces;
@@ -328,11 +328,11 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 // ── Small section: store as one chunk ──────────────────────────────
                 chunks.Add(new DocumentChunk
                 {
-                    Id         = Guid.NewGuid(),
+                    Id = Guid.NewGuid(),
                     DocumentId = documentId,
                     ChunkIndex = chunkIndex++,
                     PageNumber = 0,
-                    Content    = section
+                    Content = section
                 });
             }
             else
@@ -349,11 +349,11 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                     {
                         chunks.Add(new DocumentChunk
                         {
-                            Id         = Guid.NewGuid(),
+                            Id = Guid.NewGuid(),
                             DocumentId = documentId,
                             ChunkIndex = chunkIndex++,
                             PageNumber = 0,
-                            Content    = subChunk
+                            Content = subChunk
                         });
                     }
                 }
@@ -389,7 +389,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             var breakPoint = FindSafeSentenceBreak(text, start, windowEnd);
 
             var length = (breakPoint > start) ? breakPoint - start + 1 : maxLength;
-            var slice  = text.Substring(start, length).Trim();
+            var slice = text.Substring(start, length).Trim();
 
             if (!string.IsNullOrWhiteSpace(slice))
                 yield return slice;
@@ -445,18 +445,18 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             if (buffer.Length == 0) return;
             merged.Add(new DocumentChunk
             {
-                Id        = Guid.NewGuid(),
+                Id = Guid.NewGuid(),
                 DocumentId = documentId,
                 ChunkIndex = merged.Count,
-                PageNumber  = bufferPage,
-                Content     = buffer.ToString().Trim()
+                PageNumber = bufferPage,
+                Content = buffer.ToString().Trim()
             });
             buffer.Clear();
         }
 
         foreach (var chunk in chunks)
         {
-            var isHeading    = chunk.Content.TrimStart().StartsWith('#');
+            var isHeading = chunk.Content.TrimStart().StartsWith('#');
             var isTinyHeading = isHeading && chunk.Content.Length < options.MinChunkCharacters / 2;
 
             if (buffer.Length == 0)
@@ -512,7 +512,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         {
             if (merged.Count > 0 && buffer.Length < options.MinChunkCharacters)
             {
-                var last    = merged[^1];
+                var last = merged[^1];
                 var combined = last.Content + "\n\n" + buffer.ToString().Trim();
                 if (combined.Length <= options.MaxChunkCharacters)
                 {

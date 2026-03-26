@@ -3,7 +3,6 @@ using GraphPaper.Domain.Entities;
 using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -32,10 +31,10 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
     private readonly string _baseUrl;
     private readonly string _modelId;
 
-    private const int    TOP_K_CHUNKS            = 5;
-    private const double MIN_SIMILARITY           = 0.55;
-    private const int    MAX_ENTITY_PAIRS_PER_DOC = 300;
-    private const string DEFAULT_RELATION_TYPE    = "có_liên_hệ_với";
+    private const int TOP_K_CHUNKS = 5;
+    private const double MIN_SIMILARITY = 0.55;
+    private const int MAX_ENTITY_PAIRS_PER_DOC = 300;
+    private const string DEFAULT_RELATION_TYPE = "có_liên_hệ_với";
 
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -58,13 +57,13 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
         string baseUrl,
         string modelId)
     {
-        _unitOfWork        = unitOfWork;
+        _unitOfWork = unitOfWork;
         _httpClientFactory = httpClientFactory;
-        _embeddingService  = embeddingService;
-        _options           = options;
-        _logger            = logger;
-        _baseUrl           = baseUrl;
-        _modelId           = modelId;
+        _embeddingService = embeddingService;
+        _options = options;
+        _logger = logger;
+        _baseUrl = baseUrl;
+        _modelId = modelId;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -90,7 +89,7 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
         var entities = await _unitOfWork.ExtractedEntities
             .GetAllAsync(e => chunkIds.Contains(e.ChunkId));
 
-        if (entities.Count < 2)
+        if (entities.Count < 10)
         {
             _logger.LogInformation(
                 "Enrichment skipped for {DocumentId}: only {Count} entities.",
@@ -101,20 +100,24 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
         // ── 2. Load existing relationship keys to skip already-found pairs ─────
         // MakePairKey produces a canonical sorted key (smaller GUID first),
         // so no symmetric lookup is needed.
-        var entityIds  = entities.Select(e => e.Id).ToList();
+        var entityIds = entities.Select(e => e.Id).ToList();
         var storedKeys = await GetExistingRelationshipKeysAsync(entityIds);
-        var seenPairs  = new HashSet<string>(storedKeys, StringComparer.OrdinalIgnoreCase);
+        var seenPairs = new HashSet<string>(storedKeys, StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation(
             "Starting cross-chunk enrichment for {DocumentId}: {EntityCount} entities, {ChunkCount} embedded chunks.",
             documentId, entities.Count, embeddedChunks.Count);
 
-        var pairsQueued      = 0;
+        var pairsQueued = 0;
         var newRelationships = new List<ExtractedRelationship>();
+
+        var i = 0;
 
         // ── 3. For each entity: embed → cosine rank → pairwise LLM calls ───────
         foreach (var entity in entities)
         {
+            i++;
+            _logger.LogInformation($"{i}: {entity}");
             if (pairsQueued >= MAX_ENTITY_PAIRS_PER_DOC) break;
 
             var queryText = string.IsNullOrWhiteSpace(entity.Description)
@@ -135,7 +138,7 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
             var topChunks = RankChunksBySimilarity(embeddedChunks, queryVector, TOP_K_CHUNKS, MIN_SIMILARITY);
             if (topChunks.Count == 0) continue;
 
-            var relevantChunkIds  = new HashSet<Guid>(topChunks.Select(c => c.Id));
+            var relevantChunkIds = new HashSet<Guid>(topChunks.Select(c => c.Id));
             var colocatedEntities = entities
                 .Where(e => e.Id != entity.Id && relevantChunkIds.Contains(e.ChunkId))
                 .ToList();
@@ -214,7 +217,7 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
         double dot = 0, normA = 0, normB = 0;
         for (var i = 0; i < a.Length; i++)
         {
-            dot   += a[i] * b[i];
+            dot += a[i] * b[i];
             normA += a[i] * a[i];
             normB += b[i] * b[i];
         }
@@ -241,14 +244,14 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
             var url = $"{_baseUrl}/api/chat";
             var request = new
             {
-                model    = _modelId,
+                model = _modelId,
                 messages = new[]
                 {
                     new { role = "system", content = SYSTEM_PROMPT },
                     new { role = "user",   content = prompt }
                 },
-                stream  = false,
-                format  = "json",
+                stream = false,
+                format = "json",
                 options = new { temperature = 0.1, num_predict = 1024 }
             };
 
@@ -334,7 +337,7 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
         catch
         {
             var first = text.IndexOf('{');
-            var last  = text.LastIndexOf('}');
+            var last = text.LastIndexOf('}');
             if (first >= 0 && last > first)
                 try { schema = JsonSerializer.Deserialize<RelationshipOnlySchema>(text[first..(last + 1)], JsonOptions); }
                 catch { /* ignore */ }
@@ -367,10 +370,10 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
 
             accumulator.Add(new ExtractedRelationship
             {
-                Id              = Guid.NewGuid(),
-                SourceEntityId  = srcId,
-                TargetEntityId  = tgtId,
-                RelationType    = NormalizeWs(r.RelationType) is { Length: > 0 } rel
+                Id = Guid.NewGuid(),
+                SourceEntityId = srcId,
+                TargetEntityId = tgtId,
+                RelationType = NormalizeWs(r.RelationType) is { Length: > 0 } rel
                                       ? rel : DEFAULT_RELATION_TYPE,
                 ConfidenceScore = confidence
             });
@@ -438,9 +441,9 @@ public sealed class OllamaRelationshipEnrichmentService : IRelationshipEnrichmen
 
     private sealed class RelationshipSchema
     {
-        public string Source         { get; set; } = string.Empty;
-        public string Target         { get; set; } = string.Empty;
-        public string? RelationType  { get; set; }
+        public string Source { get; set; } = string.Empty;
+        public string Target { get; set; } = string.Empty;
+        public string? RelationType { get; set; }
         public float ConfidenceScore { get; set; }
     }
 }

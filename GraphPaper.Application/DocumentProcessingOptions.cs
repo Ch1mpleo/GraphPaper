@@ -30,7 +30,7 @@ public sealed class DocumentProcessingOptions
     public int EmbeddingMaxParallel { get; init; } = 5;
 
     /// <summary>Characters sent to Gemini; longer text is truncated.</summary>
-    public int EmbeddingMaxTextLength { get; init; } = 8000;
+    public int EmbeddingMaxTextLength { get; init; } = 10000;
 
     /// <summary>Output vector dimensionality (must match pgvector column).</summary>
     public int EmbeddingOutputDimensionality { get; init; } = 768;

@@ -1,5 +1,5 @@
-using GraphPaper.Application.Interfaces;
 using GraphPaper.Application.DTOs.MindmapDTO;
+using GraphPaper.Application.Interfaces;
 using GraphPaper.Domain.Entities;
 using GraphPaper.Infrastructure.Interfaces;
 using Microsoft.EntityFrameworkCore;

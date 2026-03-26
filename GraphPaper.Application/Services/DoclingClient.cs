@@ -1,6 +1,6 @@
-using System.Net.Http.Json;
 using GraphPaper.Application.DTOs.DoclingDTO;
 using GraphPaper.Application.Interfaces;
+using System.Net.Http.Json;
 
 namespace GraphPaper.Application.Services;
 
