@@ -102,6 +102,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             var doclingClient = scope.ServiceProvider.GetRequiredService<IDoclingClient>();
             var embeddingService = scope.ServiceProvider.GetRequiredService<IEmbeddingService>();
             var knowledgeExtractionService = scope.ServiceProvider.GetRequiredService<IKnowledgeExtractionService>();
+            var relationshipEnrichmentService = scope.ServiceProvider.GetRequiredService<IRelationshipEnrichmentService>();
             var mindmapService = scope.ServiceProvider.GetRequiredService<IMindmapService>();
 
             await ProcessDocumentAsync(
@@ -112,6 +113,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
                 _openXmlParser,
                 embeddingService,
                 knowledgeExtractionService,
+                relationshipEnrichmentService,
                 mindmapService,
                 _options,
                 _logger);
@@ -128,6 +130,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         OpenXmlDocumentParser openXmlParser,
         IEmbeddingService embeddingService,
         IKnowledgeExtractionService knowledgeExtractionService,
+        IRelationshipEnrichmentService relationshipEnrichmentService,
         IMindmapService mindmapService,
         DocumentProcessingOptions options,
         ILogger logger)
@@ -167,7 +170,7 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             chunks = MergeSmallChunks(chunks, options);
             ApplyChunkOverlap(chunks, options);
 
-            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Extracting);
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Chunking);
 
             var embeddableChunks = chunks.Where(c => ShouldEmbed(c.Content)).ToList();
             if (embeddableChunks.Count > 0)
@@ -180,10 +183,24 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
             await unitOfWork.DocumentChunks.AddRangeAsync(chunks);
             await unitOfWork.SaveChangesAsync();
 
-            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, logger);
+            // Pass 1 & 2 — entity then relationship extraction
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.ExtractingEntities);
+            await ExtractKnowledgeAsync(chunks, knowledgeExtractionService, unitOfWork, document, logger);
 
-            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.Ready);
+            // ── Step 3: Cross-chunk relationship enrichment via embedding similarity ──
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.EnrichingRelationships);
+            try
+            {
+                await relationshipEnrichmentService.EnrichRelationshipsAsync(document.Id);
+                logger.LogInformation("Relationship enrichment complete for {DocumentId}", document.Id);
+            }
+            catch (Exception enrichEx)
+            {
+                logger.LogWarning(enrichEx,
+                    "Relationship enrichment failed for {DocumentId}. Continuing.", document.Id);
+            }
 
+            await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.GeneratingMindmap);
             try
             {
                 await mindmapService.GenerateAndSaveAsync(document.Id);
@@ -560,13 +577,18 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
         IReadOnlyList<DocumentChunk> chunks,
         IKnowledgeExtractionService knowledgeExtractionService,
         IUnitOfWork unitOfWork,
+        Document document,
         ILogger logger)
     {
-        // In-memory dedup across all chunks of this document.
-        // Prevents the overlap prefix from generating duplicate entities/relationships
-        // that were already stored from the previous chunk's main content.
-        var seenEntityKeys       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenRelationshipKeys  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // ══════════════════════════════════════════════════════════════════════
+        // Pass 1 — Entity extraction
+        // Build a global entity map (normalised name → persisted entity ID) so
+        // Pass 2 can resolve cross-chunk FK references without dangling pointers.
+        // ══════════════════════════════════════════════════════════════════════
+        var seenEntityKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // name (normalised) → persisted entity ID
+        var globalEntityMap = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < chunks.Count; i++)
         {
@@ -575,50 +597,75 @@ public sealed class DocumentProcessingService : IDocumentProcessingService
 
             try
             {
-                var extraction = await knowledgeExtractionService.ExtractFromChunkAsync(chunks[i]);
+                var entities = await knowledgeExtractionService.ExtractEntitiesAsync(chunks[i]);
 
-                // ── Entity dedup ─────────────────────────────────────────────────────
-                // Keep only entities whose name has not been stored yet for this document.
-                // seenEntityNames.Add() returns false if the name already existed.
-                var newEntities = extraction.Entities
+                var newEntities = entities
                     .Where(e => seenEntityKeys.Add(NormalizeEntityKey(e.Name)))
                     .ToList();
 
-                // ── Relationship dedup ────────────────────────────────────────────────
-                // A relationship is only valid if BOTH its source and target are in the
-                // set of entities we're about to insert (same chunk extraction).
-                // Referencing an entity that was filtered out would leave a dangling FK.
-                var validEntityIds = new HashSet<Guid>(newEntities.Select(e => e.Id));
-
-                var newRelationships = extraction.Relationships
-                    .Where(r =>
-                        validEntityIds.Contains(r.SourceEntityId) &&
-                        validEntityIds.Contains(r.TargetEntityId) &&
-                        seenRelationshipKeys.Add(
-                            $"{r.SourceEntityId}|{r.TargetEntityId}|{r.RelationType}"))
-                    .ToList();
-
                 if (newEntities.Count > 0)
+                {
                     await unitOfWork.ExtractedEntities.AddRangeAsync(newEntities);
-
-                if (newRelationships.Count > 0)
-                    await unitOfWork.ExtractedRelationships.AddRangeAsync(newRelationships);
-
-                if (newEntities.Count > 0 || newRelationships.Count > 0)
                     await unitOfWork.SaveChangesAsync();
 
-                if (newEntities.Count < extraction.Entities.Count)
+                    foreach (var e in newEntities)
+                        globalEntityMap[e.Name] = e.Id;
+                }
+
+                if (newEntities.Count < entities.Count)
                     logger.LogDebug(
-                        "Chunk {ChunkId}: skipped {Dupes} duplicate entities from overlap text.",
-                        chunks[i].Id,
-                        extraction.Entities.Count - newEntities.Count);
+                        "Pass1 Chunk {ChunkId}: skipped {Dupes} duplicate entities.",
+                        chunks[i].Id, entities.Count - newEntities.Count);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
-                logger.LogWarning(ex, "Knowledge extraction failed for chunk {ChunkId}. Continuing.", chunks[i].Id);
-                continue;
+                logger.LogWarning(ex, "Entity extraction failed for chunk {ChunkId}. Continuing.", chunks[i].Id);
             }
         }
+
+        logger.LogInformation(
+            "Pass 1 complete: {Count} unique entities extracted.", globalEntityMap.Count);
+
+        if (globalEntityMap.Count == 0) return;
+
+        // Flip status to ExtractingRelationships before Pass 2
+        await UpdateDocumentStatusAsync(unitOfWork, document, DocumentStatus.ExtractingRelationships);
+
+        // ══════════════════════════════════════════════════════════════════════
+        // Pass 2 — Relationship extraction
+        // Re-iterate every chunk. Now source/target are looked up in globalEntityMap
+        // so relationships between entities from *different* chunks are captured.
+        // ══════════════════════════════════════════════════════════════════════
+        var seenRelationshipKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            if (!ShouldExtractKnowledge(chunks[i].Content))
+                continue;
+
+            try
+            {
+                var relationships = await knowledgeExtractionService
+                    .ExtractRelationshipsAsync(chunks[i], globalEntityMap);
+
+                var newRelationships = relationships
+                    .Where(r => seenRelationshipKeys.Add(
+                        $"{r.SourceEntityId}|{r.TargetEntityId}|{r.RelationType}"))
+                    .ToList();
+
+                if (newRelationships.Count > 0)
+                {
+                    await unitOfWork.ExtractedRelationships.AddRangeAsync(newRelationships);
+                    await unitOfWork.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                logger.LogWarning(ex, "Relationship extraction failed for chunk {ChunkId}. Continuing.", chunks[i].Id);
+            }
+        }
+
+        logger.LogInformation("Pass 2 complete: relationships extracted for document.");
     }
 
     private static bool ShouldExtractKnowledge(string content)

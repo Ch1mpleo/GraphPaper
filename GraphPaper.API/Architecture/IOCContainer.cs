@@ -215,6 +215,16 @@ public static class IocContainer
             return new OllamaKnowledgeExtractionService(factory, options, ollamaBaseUrl, ollamaModel);
         });
 
+        services.AddScoped<IRelationshipEnrichmentService>(sp =>
+        {
+            var uow     = sp.GetRequiredService<IUnitOfWork>();
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            var embed   = sp.GetRequiredService<IEmbeddingService>();
+            var opts    = sp.GetRequiredService<IOptions<DocumentProcessingOptions>>().Value;
+            var logger  = sp.GetRequiredService<ILogger<OllamaRelationshipEnrichmentService>>();
+            return new OllamaRelationshipEnrichmentService(uow, factory, embed, opts, logger, ollamaBaseUrl, ollamaModel);
+        });
+
         return services;
     }
 }
